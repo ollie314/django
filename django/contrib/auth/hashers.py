@@ -2,21 +2,21 @@ from __future__ import unicode_literals
 
 import base64
 import binascii
-from collections import OrderedDict
 import hashlib
 import importlib
+from collections import OrderedDict
 
-from django.dispatch import receiver
 from django.conf import settings
-from django.test.signals import setting_changed
-from django.utils.encoding import force_bytes, force_str, force_text
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.crypto import (
-    pbkdf2, constant_time_compare, get_random_string)
+from django.core.signals import setting_changed
+from django.dispatch import receiver
 from django.utils import lru_cache
+from django.utils.crypto import (
+    constant_time_compare, get_random_string, pbkdf2,
+)
+from django.utils.encoding import force_bytes, force_str, force_text
 from django.utils.module_loading import import_string
 from django.utils.translation import ugettext_noop as _
-
 
 UNUSABLE_PASSWORD_PREFIX = '!'  # This will never be a valid encoded hash
 UNUSABLE_PASSWORD_SUFFIX_LENGTH = 40  # number of random chars to add after UNUSABLE_PASSWORD_PREFIX
@@ -221,12 +221,12 @@ class PBKDF2PasswordHasher(BasePasswordHasher):
     """
     Secure password hashing using the PBKDF2 algorithm (recommended)
 
-    Configured to use PBKDF2 + HMAC + SHA256 with 20000 iterations.
+    Configured to use PBKDF2 + HMAC + SHA256.
     The result is a 64 byte binary string.  Iterations may be changed
     safely but you must rename the algorithm if you change SHA256.
     """
     algorithm = "pbkdf2_sha256"
-    iterations = 20000
+    iterations = 30000
     digest = hashlib.sha256
 
     def encode(self, password, salt, iterations=None):
@@ -290,14 +290,11 @@ class BCryptSHA256PasswordHasher(BasePasswordHasher):
 
     def encode(self, password, salt):
         bcrypt = self._load_library()
-        # Need to reevaluate the force_bytes call once bcrypt is supported on
-        # Python 3
-
-        # Hash the password prior to using bcrypt to prevent password truncation
-        #   See: https://code.djangoproject.com/ticket/20138
+        # Hash the password prior to using bcrypt to prevent password
+        # truncation as described in #20138.
         if self.digest is not None:
-            # We use binascii.hexlify here because Python3 decided that a hex encoded
-            #   bytestring is somehow a unicode.
+            # Use binascii.hexlify() because a hex encoded bytestring is
+            # Unicode on Python 3.
             password = binascii.hexlify(self.digest(force_bytes(password)).digest())
         else:
             password = force_bytes(password)
@@ -310,11 +307,11 @@ class BCryptSHA256PasswordHasher(BasePasswordHasher):
         assert algorithm == self.algorithm
         bcrypt = self._load_library()
 
-        # Hash the password prior to using bcrypt to prevent password truncation
-        #   See: https://code.djangoproject.com/ticket/20138
+        # Hash the password prior to using bcrypt to prevent password
+        # truncation as described in #20138.
         if self.digest is not None:
-            # We use binascii.hexlify here because Python3 decided that a hex encoded
-            #   bytestring is somehow a unicode.
+            # Use binascii.hexlify() because a hex encoded bytestring is
+            # Unicode on Python 3.
             password = binascii.hexlify(self.digest(force_bytes(password)).digest())
         else:
             password = force_bytes(password)
@@ -337,6 +334,10 @@ class BCryptSHA256PasswordHasher(BasePasswordHasher):
             (_('checksum'), mask_hash(checksum)),
         ])
 
+    def must_update(self, encoded):
+        algorithm, empty, algostr, rounds, data = encoded.split('$', 4)
+        return int(rounds) != self.rounds
+
 
 class BCryptPasswordHasher(BCryptSHA256PasswordHasher):
     """
@@ -349,7 +350,7 @@ class BCryptPasswordHasher(BCryptSHA256PasswordHasher):
 
     This hasher does not first hash the password which means it is subject to
     the 72 character bcrypt password truncation, most use cases should prefer
-    the BCryptSha512PasswordHasher.
+    the BCryptSHA256PasswordHasher.
 
     See: https://code.djangoproject.com/ticket/20138
     """

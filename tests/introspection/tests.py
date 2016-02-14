@@ -1,13 +1,18 @@
 from __future__ import unicode_literals
 
+from unittest import skipUnless
+
 from django.db import connection
 from django.db.utils import DatabaseError
-from django.test import TestCase, skipUnlessDBFeature
+from django.test import TransactionTestCase, mock, skipUnlessDBFeature
 
-from .models import Reporter, Article
+from .models import Article, City, Reporter
 
 
-class IntrospectionTests(TestCase):
+class IntrospectionTests(TransactionTestCase):
+
+    available_apps = ['introspection']
+
     def test_table_names(self):
         tl = connection.introspection.table_names()
         self.assertEqual(tl, sorted(tl))
@@ -25,13 +30,9 @@ class IntrospectionTests(TestCase):
                              "django_table_names() returned a non-Django table")
 
     def test_django_table_names_retval_type(self):
-        # Ticket #15216
-        with connection.cursor() as cursor:
-            cursor.execute('CREATE TABLE django_ixn_test_table (id INTEGER);')
-
+        # Table name is a list #15216
         tl = connection.introspection.django_table_names(only_existing=True)
         self.assertIs(type(tl), list)
-
         tl = connection.introspection.django_table_names(only_existing=False)
         self.assertIs(type(tl), list)
 
@@ -102,6 +103,12 @@ class IntrospectionTests(TestCase):
             [False, nullable_by_backend, nullable_by_backend, nullable_by_backend, True, True, False]
         )
 
+    @skipUnlessDBFeature('can_introspect_autofield')
+    def test_bigautofield(self):
+        with connection.cursor() as cursor:
+            desc = connection.introspection.get_table_description(cursor, City._meta.db_table)
+        self.assertIn('BigAutoField', [datatype(r[1], r) for r in desc])
+
     # Regression test for #9991 - 'real' types in postgres
     @skipUnlessDBFeature('has_real_datatype')
     def test_postgresql_real_type(self):
@@ -111,17 +118,41 @@ class IntrospectionTests(TestCase):
             cursor.execute('DROP TABLE django_ixn_real_test_table;')
         self.assertEqual(datatype(desc[0][1], desc[0]), 'FloatField')
 
+    @skipUnlessDBFeature('can_introspect_foreign_keys')
     def test_get_relations(self):
         with connection.cursor() as cursor:
             relations = connection.introspection.get_relations(cursor, Article._meta.db_table)
 
-        # Older versions of MySQL don't have the chops to report on this stuff,
-        # so just skip it if no relations come back. If they do, though, we
-        # should test that the response is correct.
-        if relations:
-            # That's {field_index: (field_index_other_table, other_table)}
-            self.assertEqual(relations, {3: (0, Reporter._meta.db_table),
-                                         4: (0, Article._meta.db_table)})
+        # That's {field_name: (field_name_other_table, other_table)}
+        expected_relations = {
+            'reporter_id': ('id', Reporter._meta.db_table),
+            'response_to_id': ('id', Article._meta.db_table),
+        }
+        self.assertEqual(relations, expected_relations)
+
+        # Removing a field shouldn't disturb get_relations (#17785)
+        body = Article._meta.get_field('body')
+        with connection.schema_editor() as editor:
+            editor.remove_field(Article, body)
+        with connection.cursor() as cursor:
+            relations = connection.introspection.get_relations(cursor, Article._meta.db_table)
+        with connection.schema_editor() as editor:
+            editor.add_field(Article, body)
+        self.assertEqual(relations, expected_relations)
+
+    @skipUnless(connection.vendor == 'sqlite', "This is an sqlite-specific issue")
+    def test_get_relations_alt_format(self):
+        """With SQLite, foreign keys can be added with different syntaxes."""
+        with connection.cursor() as cursor:
+            cursor.fetchone = mock.Mock(
+                return_value=[
+                    "CREATE TABLE track(id, art_id INTEGER, FOREIGN KEY(art_id) REFERENCES {}(id));".format(
+                        Article._meta.db_table
+                    )
+                ]
+            )
+            relations = connection.introspection.get_relations(cursor, 'mocked_table')
+        self.assertEqual(relations, {'art_id': ('id', Article._meta.db_table)})
 
     @skipUnlessDBFeature('can_introspect_foreign_keys')
     def test_get_key_columns(self):

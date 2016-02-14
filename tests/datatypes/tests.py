@@ -82,8 +82,9 @@ class DataTypesTestCase(TestCase):
         an error if given a timezone-aware datetime object."""
         dt = datetime.datetime(2008, 8, 31, 16, 20, tzinfo=utc)
         d = Donut(name='Bear claw', consumed_at=dt)
-        self.assertRaises(ValueError, d.save)
-        # ValueError: MySQL backend does not support timezone-aware datetimes.
+        # MySQL backend does not support timezone-aware datetimes.
+        with self.assertRaises(ValueError):
+            d.save()
 
     def test_datefield_auto_now_add(self):
         """Regression test for #10970, auto_now_add for DateField should store
@@ -93,4 +94,5 @@ class DataTypesTestCase(TestCase):
         self.assertIsInstance(b.baked_timestamp, datetime.datetime)
         # We need to test this way because datetime.datetime inherits
         # from datetime.date:
-        self.assertIsInstance(b.baked_date, datetime.date) and not isinstance(b.baked_date, datetime.datetime)
+        self.assertIsInstance(b.baked_date, datetime.date)
+        self.assertNotIsInstance(b.baked_date, datetime.datetime)

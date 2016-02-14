@@ -1,19 +1,20 @@
-import os
 import errno
+import os
 from datetime import datetime
 
 from django.conf import settings
-from django.core.files import locks, File
+from django.core.exceptions import SuspiciousFileOperation
+from django.core.files import File, locks
 from django.core.files.move import file_move_safe
+from django.core.signals import setting_changed
+from django.utils._os import abspathu, safe_join
 from django.utils.crypto import get_random_string
-from django.utils.encoding import force_text, filepath_to_uri
-from django.utils.functional import LazyObject
+from django.utils.deconstruct import deconstructible
+from django.utils.encoding import filepath_to_uri, force_text
+from django.utils.functional import LazyObject, cached_property
 from django.utils.module_loading import import_string
 from django.utils.six.moves.urllib.parse import urljoin
 from django.utils.text import get_valid_filename
-from django.utils._os import safe_join, abspathu
-from django.utils.deconstruct import deconstructible
-
 
 __all__ = ('Storage', 'FileSystemStorage', 'DefaultStorage', 'default_storage')
 
@@ -33,7 +34,7 @@ class Storage(object):
         """
         return self._open(name, mode)
 
-    def save(self, name, content):
+    def save(self, name, content, max_length=None):
         """
         Saves new content to the file specified by name. The content should be
         a proper File object or any python file-like object, ready to be read
@@ -46,7 +47,7 @@ class Storage(object):
         if not hasattr(content, 'chunks'):
             content = File(content)
 
-        name = self.get_available_name(name)
+        name = self.get_available_name(name, max_length=max_length)
         name = self._save(name, content)
 
         # Store filenames with forward slashes, even on Windows
@@ -61,7 +62,7 @@ class Storage(object):
         """
         return get_valid_filename(name)
 
-    def get_available_name(self, name):
+    def get_available_name(self, name, max_length=None):
         """
         Returns a filename that's free on the target storage system, and
         available for new content to be written to.
@@ -71,10 +72,25 @@ class Storage(object):
         # If the filename already exists, add an underscore and a random 7
         # character alphanumeric string (before the file extension, if one
         # exists) to the filename until the generated filename doesn't exist.
-        while self.exists(name):
+        # Truncate original name if required, so the new filename does not
+        # exceed the max_length.
+        while self.exists(name) or (max_length and len(name) > max_length):
             # file_ext includes the dot.
             name = os.path.join(dir_name, "%s_%s%s" % (file_root, get_random_string(7), file_ext))
-
+            if max_length is None:
+                continue
+            # Truncate file_root if max_length exceeded.
+            truncation = len(name) - max_length
+            if truncation > 0:
+                file_root = file_root[:-truncation]
+                # Entire file_root was truncated in attempt to find an available filename.
+                if not file_root:
+                    raise SuspiciousFileOperation(
+                        'Storage can not find an available filename for "%s". '
+                        'Please make sure that the corresponding file field '
+                        'allows sufficient "max_length".' % name
+                    )
+                name = os.path.join(dir_name, "%s_%s%s" % (file_root, get_random_string(7), file_ext))
         return name
 
     def path(self, name):
@@ -150,24 +166,49 @@ class FileSystemStorage(Storage):
     """
 
     def __init__(self, location=None, base_url=None, file_permissions_mode=None,
-            directory_permissions_mode=None):
-        if location is None:
-            location = settings.MEDIA_ROOT
-        self.base_location = location
-        self.location = abspathu(self.base_location)
-        if base_url is None:
-            base_url = settings.MEDIA_URL
-        elif not base_url.endswith('/'):
+                 directory_permissions_mode=None):
+        self._location = location
+        if base_url is not None and not base_url.endswith('/'):
             base_url += '/'
-        self.base_url = base_url
-        self.file_permissions_mode = (
-            file_permissions_mode if file_permissions_mode is not None
-            else settings.FILE_UPLOAD_PERMISSIONS
-        )
-        self.directory_permissions_mode = (
-            directory_permissions_mode if directory_permissions_mode is not None
-            else settings.FILE_UPLOAD_DIRECTORY_PERMISSIONS
-        )
+        self._base_url = base_url
+        self._file_permissions_mode = file_permissions_mode
+        self._directory_permissions_mode = directory_permissions_mode
+        setting_changed.connect(self._clear_cached_properties)
+
+    def _clear_cached_properties(self, setting, **kwargs):
+        """Reset setting based property values."""
+        if setting == 'MEDIA_ROOT':
+            self.__dict__.pop('base_location', None)
+            self.__dict__.pop('location', None)
+        elif setting == 'MEDIA_URL':
+            self.__dict__.pop('base_url', None)
+        elif setting == 'FILE_UPLOAD_PERMISSIONS':
+            self.__dict__.pop('file_permissions_mode', None)
+        elif setting == 'FILE_UPLOAD_DIRECTORY_PERMISSIONS':
+            self.__dict__.pop('directory_permissions_mode', None)
+
+    def _value_or_setting(self, value, setting):
+        return setting if value is None else value
+
+    @cached_property
+    def base_location(self):
+        return self._value_or_setting(self._location, settings.MEDIA_ROOT)
+
+    @cached_property
+    def location(self):
+        return abspathu(self.base_location)
+
+    @cached_property
+    def base_url(self):
+        return self._value_or_setting(self._base_url, settings.MEDIA_URL)
+
+    @cached_property
+    def file_permissions_mode(self):
+        return self._value_or_setting(self._file_permissions_mode, settings.FILE_UPLOAD_PERMISSIONS)
+
+    @cached_property
+    def directory_permissions_mode(self):
+        return self._value_or_setting(self._directory_permissions_mode, settings.FILE_UPLOAD_DIRECTORY_PERMISSIONS)
 
     def _open(self, name, mode='rb'):
         return File(open(self.path(name), mode))

@@ -3,18 +3,20 @@ Serialize data to/from JSON
 """
 
 # Avoid shadowing the standard library json module
-from __future__ import absolute_import
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 import datetime
 import decimal
 import json
 import sys
+import uuid
 
 from django.core.serializers.base import DeserializationError
-from django.core.serializers.python import Serializer as PythonSerializer
-from django.core.serializers.python import Deserializer as PythonDeserializer
+from django.core.serializers.python import (
+    Deserializer as PythonDeserializer, Serializer as PythonSerializer,
+)
 from django.utils import six
+from django.utils.functional import Promise
 from django.utils.timezone import is_aware
 
 
@@ -86,7 +88,7 @@ def Deserializer(stream_or_string, **options):
 
 class DjangoJSONEncoder(json.JSONEncoder):
     """
-    JSONEncoder subclass that knows how to encode date/time and decimal types.
+    JSONEncoder subclass that knows how to encode date/time, decimal types and UUIDs.
     """
     def default(self, o):
         # See "Date Time String Format" in the ECMA-262 specification.
@@ -108,6 +110,10 @@ class DjangoJSONEncoder(json.JSONEncoder):
             return r
         elif isinstance(o, decimal.Decimal):
             return str(o)
+        elif isinstance(o, uuid.UUID):
+            return str(o)
+        elif isinstance(o, Promise):
+            return six.text_type(o)
         else:
             return super(DjangoJSONEncoder, self).default(o)
 

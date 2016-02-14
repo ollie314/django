@@ -13,7 +13,7 @@ views for displaying drilldown pages for date-based data.
     defined as follows in ``myapp/models.py``::
 
         from django.db import models
-        from django.core.urlresolvers import reverse
+        from django.urls import reverse
 
         class Article(models.Model):
             title = models.CharField(max_length=200)
@@ -22,8 +22,8 @@ views for displaying drilldown pages for date-based data.
             def get_absolute_url(self):
                 return reverse('article-detail', kwargs={'pk': self.pk})
 
-ArchiveIndexView
-----------------
+``ArchiveIndexView``
+====================
 
 .. class:: ArchiveIndexView
 
@@ -48,11 +48,9 @@ ArchiveIndexView
     :class:`django.views.generic.dates.BaseDateListView`), the template's
     context will be:
 
-    * ``date_list``: A
-      :meth:`DateQuerySet<django.db.models.query.QuerySet.dates>` object
-      containing all years that have objects available according to
-      ``queryset``, represented as
-      :class:`datetime.datetime<python:datetime.datetime>` objects, in
+    * ``date_list``: A :meth:`QuerySet <django.db.models.query.QuerySet.dates>`
+      object containing all years that have objects available according to
+      ``queryset``, represented as :class:`datetime.datetime` objects, in
       descending order.
 
     **Notes**
@@ -88,8 +86,8 @@ ArchiveIndexView
 
     This will output all articles.
 
-YearArchiveView
----------------
+``YearArchiveView``
+===================
 
 .. class:: YearArchiveView
 
@@ -128,11 +126,9 @@ YearArchiveView
     :class:`django.views.generic.dates.BaseDateListView`), the template's
     context will be:
 
-    * ``date_list``: A
-      :meth:`DateQuerySet<django.db.models.query.QuerySet.dates>` object
-      containing all months that have objects available according to
-      ``queryset``, represented as
-      :class:`datetime.datetime<python:datetime.datetime>` objects, in
+    * ``date_list``: A :meth:`QuerySet <django.db.models.query.QuerySet.dates>`
+      object containing all months that have objects available according to
+      ``queryset``, represented as :class:`datetime.datetime` objects, in
       ascending order.
 
     * ``year``: A :class:`~datetime.date` object
@@ -195,8 +191,8 @@ YearArchiveView
             {% endfor %}
         </div>
 
-MonthArchiveView
-----------------
+``MonthArchiveView``
+====================
 
 .. class:: MonthArchiveView
 
@@ -223,12 +219,10 @@ MonthArchiveView
     :class:`~django.views.generic.dates.BaseDateListView`), the template's
     context will be:
 
-    * ``date_list``: A
-      :meth:`DateQuerySet<django.db.models.query.QuerySet.dates>` object
-      containing all days that have objects available in the given month,
-      according to ``queryset``, represented as
-      :class:`datetime.datetime<python:datetime.datetime>` objects, in
-      ascending order.
+    * ``date_list``: A :meth:`QuerySet <django.db.models.query.QuerySet.dates>`
+      object containing all days that have objects available in the given month,
+      according to ``queryset``, represented as :class:`datetime.datetime`
+      objects, in ascending order.
 
     * ``month``: A :class:`~datetime.date` object
       representing the given month.
@@ -256,7 +250,6 @@ MonthArchiveView
         class ArticleMonthArchiveView(MonthArchiveView):
             queryset = Article.objects.all()
             date_field = "pub_date"
-            make_object_list = True
             allow_future = True
 
     **Example myapp/urls.py**::
@@ -295,8 +288,8 @@ MonthArchiveView
             {% endif %}
         </p>
 
-WeekArchiveView
----------------
+``WeekArchiveView``
+===================
 
 .. class:: WeekArchiveView
 
@@ -349,7 +342,6 @@ WeekArchiveView
         class ArticleWeekArchiveView(WeekArchiveView):
             queryset = Article.objects.all()
             date_field = "pub_date"
-            make_object_list = True
             week_format = "%W"
             allow_future = True
 
@@ -399,8 +391,8 @@ WeekArchiveView
     output format that supports the US based week system. The :tfilter:`date`
     filter ``'%U'`` outputs the number of seconds since the Unix epoch.
 
-DayArchiveView
---------------
+``DayArchiveView``
+==================
 
 .. class:: DayArchiveView
 
@@ -464,7 +456,6 @@ DayArchiveView
         class ArticleDayArchiveView(DayArchiveView):
             queryset = Article.objects.all()
             date_field = "pub_date"
-            make_object_list = True
             allow_future = True
 
     **Example myapp/urls.py**::
@@ -502,8 +493,8 @@ DayArchiveView
             {% endif %}
         </p>
 
-TodayArchiveView
-----------------
+``TodayArchiveView``
+====================
 
 .. class:: TodayArchiveView
 
@@ -538,7 +529,6 @@ TodayArchiveView
         class ArticleTodayArchiveView(TodayArchiveView):
             queryset = Article.objects.all()
             date_field = "pub_date"
-            make_object_list = True
             allow_future = True
 
     **Example myapp/urls.py**::
@@ -560,8 +550,8 @@ TodayArchiveView
         a different template, set the ``template_name`` attribute to be the
         name of the new template.
 
-DateDetailView
---------------
+``DateDetailView``
+==================
 
 .. class:: DateDetailView
 
@@ -597,7 +587,7 @@ DateDetailView
         from django.views.generic.dates import DateDetailView
 
         urlpatterns = [
-            url(r'^(?P<year>[0-9]+)/(?P<month>[-\w]+)/(?P<day>[0-9]+)/(?P<pk>[0-9]+)/$',
+            url(r'^(?P<year>[0-9]{4})/(?P<month>[-\w]+)/(?P<day>[0-9]+)/(?P<pk>[0-9]+)/$',
                 DateDetailView.as_view(model=Article, date_field="pub_date"),
                 name="archive_date_detail"),
         ]

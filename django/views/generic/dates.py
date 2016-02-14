@@ -1,17 +1,22 @@
 from __future__ import unicode_literals
 
 import datetime
+
 from django.conf import settings
-from django.db import models
 from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from django.http import Http404
+from django.utils import timezone
 from django.utils.encoding import force_str, force_text
 from django.utils.functional import cached_property
 from django.utils.translation import ugettext as _
-from django.utils import timezone
 from django.views.generic.base import View
-from django.views.generic.detail import BaseDetailView, SingleObjectTemplateResponseMixin
-from django.views.generic.list import MultipleObjectMixin, MultipleObjectTemplateResponseMixin
+from django.views.generic.detail import (
+    BaseDetailView, SingleObjectTemplateResponseMixin,
+)
+from django.views.generic.list import (
+    MultipleObjectMixin, MultipleObjectTemplateResponseMixin,
+)
 
 
 class YearMixin(object):
@@ -648,16 +653,16 @@ class BaseDateDetailView(YearMixin, MonthMixin, DayMixin, DateMixin, BaseDetailV
                                  day, self.get_day_format())
 
         # Use a custom queryset if provided
-        qs = queryset or self.get_queryset()
+        qs = self.get_queryset() if queryset is None else queryset
 
         if not self.get_allow_future() and date > datetime.date.today():
             raise Http404(_(
                 "Future %(verbose_name_plural)s not available because "
-                "%(class_name)s.allow_future is False.") % {
-                    'verbose_name_plural': qs.model._meta.verbose_name_plural,
-                    'class_name': self.__class__.__name__,
-                },
-            )
+                "%(class_name)s.allow_future is False."
+            ) % {
+                'verbose_name_plural': qs.model._meta.verbose_name_plural,
+                'class_name': self.__class__.__name__,
+            })
 
         # Filter down a queryset from self.queryset using the date from the
         # URL. This'll get passed as the queryset to DetailView.get_object,
@@ -717,7 +722,6 @@ def _get_next_prev(generic_view, date, is_previous, period):
         * If allow_empty is false and allow_future is false, return the next
           date that contains a valid object. If that date is in the future, or
           if there are no next objects, return None.
-
     """
     date_field = generic_view.get_date_field()
     allow_empty = generic_view.get_allow_empty()

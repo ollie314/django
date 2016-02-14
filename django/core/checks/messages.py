@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-from django.utils.encoding import python_2_unicode_compatible, force_str
-
+from django.utils.encoding import force_str, python_2_unicode_compatible
 
 # Levels
 DEBUG = 10
@@ -38,9 +37,7 @@ class CheckMessage(object):
         elif isinstance(self.obj, models.base.ModelBase):
             # We need to hardcode ModelBase and Field cases because its __str__
             # method doesn't return "applabel.modellabel" and cannot be changed.
-            model = self.obj
-            app = model._meta.app_label
-            obj = '%s.%s' % (app, model._meta.object_name)
+            obj = self.obj._meta.label
         else:
             obj = force_str(self.obj)
         id = "(%s) " % self.id if self.id else ""
@@ -51,8 +48,8 @@ class CheckMessage(object):
         return "<%s: level=%r, msg=%r, hint=%r, obj=%r, id=%r>" % \
             (self.__class__.__name__, self.level, self.msg, self.hint, self.obj, self.id)
 
-    def is_serious(self):
-        return self.level >= ERROR
+    def is_serious(self, level=ERROR):
+        return self.level >= level
 
     def is_silenced(self):
         from django.conf import settings

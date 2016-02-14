@@ -1,7 +1,7 @@
 from django.conf import settings
-from django.core.management.commands.runserver import Command as RunserverCommand
-
 from django.contrib.staticfiles.handlers import StaticFilesHandler
+from django.core.management.commands.runserver import \
+    Command as RunserverCommand
 
 
 class Command(RunserverCommand):
@@ -19,7 +19,6 @@ class Command(RunserverCommand):
         Returns the static files serving handler wrapping the default handler,
         if static files should be served. Otherwise just returns the default
         handler.
-
         """
         handler = super(Command, self).get_handler(*args, **options)
         use_static_handler = options.get('use_static_handler', True)

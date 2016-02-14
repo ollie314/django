@@ -5,13 +5,13 @@ import unittest
 
 from django.core.checks import Error, Warning as DjangoWarning
 from django.db import connection, models
-from django.test.utils import override_settings
+from django.test import SimpleTestCase, TestCase
+from django.test.utils import isolate_apps, override_settings
 from django.utils.timezone import now
 
-from .base import IsolatedModelsTestCase
 
-
-class AutoFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class AutoFieldTests(SimpleTestCase):
 
     def test_valid_case(self):
         class Model(models.Model):
@@ -37,7 +37,6 @@ class AutoFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 'AutoFields must set primary_key=True.',
-                hint=None,
                 obj=field,
                 id='fields.E100',
             ),
@@ -45,7 +44,8 @@ class AutoFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class BooleanFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class BooleanFieldTests(SimpleTestCase):
 
     def test_nullable_boolean_field(self):
         class Model(models.Model):
@@ -64,7 +64,8 @@ class BooleanFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class CharFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class CharFieldTests(TestCase):
 
     def test_valid_field(self):
         class Model(models.Model):
@@ -90,7 +91,6 @@ class CharFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "CharFields must define a 'max_length' attribute.",
-                hint=None,
                 obj=field,
                 id='fields.E120',
             ),
@@ -106,7 +106,6 @@ class CharFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'max_length' must be a positive integer.",
-                hint=None,
                 obj=field,
                 id='fields.E121',
             ),
@@ -122,7 +121,21 @@ class CharFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'max_length' must be a positive integer.",
-                hint=None,
+                obj=field,
+                id='fields.E121',
+            ),
+        ]
+        self.assertEqual(errors, expected)
+
+    def test_str_max_length_value(self):
+        class Model(models.Model):
+            field = models.CharField(max_length='20')
+
+        field = Model._meta.get_field('field')
+        errors = field.check()
+        expected = [
+            Error(
+                "'max_length' must be a positive integer.",
                 obj=field,
                 id='fields.E121',
             ),
@@ -138,7 +151,6 @@ class CharFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'choices' must be an iterable (e.g., a list or tuple).",
-                hint=None,
                 obj=field,
                 id='fields.E004',
             ),
@@ -154,7 +166,6 @@ class CharFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'choices' must be an iterable containing (actual value, human readable name) tuples.",
-                hint=None,
                 obj=field,
                 id='fields.E005',
             ),
@@ -170,7 +181,6 @@ class CharFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'db_index' must be None, True or False.",
-                hint=None,
                 obj=field,
                 id='fields.E006',
             ),
@@ -191,7 +201,6 @@ class CharFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 'MySQL does not allow unique CharFields to have a max_length > 255.',
-                hint=None,
                 obj=field,
                 id='mysql.E001',
             )
@@ -199,7 +208,8 @@ class CharFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class DateFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class DateFieldTests(TestCase):
 
     def test_auto_now_and_auto_now_add_raise_error(self):
         class Model(models.Model):
@@ -216,7 +226,6 @@ class DateFieldTests(IsolatedModelsTestCase):
                 "The options auto_now, auto_now_add, and default "
                 "are mutually exclusive. Only one of these options "
                 "may be present.",
-                hint=None,
                 obj=field,
                 id='fields.E160',
             ))
@@ -265,7 +274,8 @@ class DateFieldTests(IsolatedModelsTestCase):
         self.test_fix_default_value()
 
 
-class DateTimeFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class DateTimeFieldTests(TestCase):
 
     def test_fix_default_value(self):
         class Model(models.Model):
@@ -309,7 +319,8 @@ class DateTimeFieldTests(IsolatedModelsTestCase):
         self.test_fix_default_value()
 
 
-class DecimalFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class DecimalFieldTests(SimpleTestCase):
 
     def test_required_attributes(self):
         class Model(models.Model):
@@ -320,13 +331,11 @@ class DecimalFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "DecimalFields must define a 'decimal_places' attribute.",
-                hint=None,
                 obj=field,
                 id='fields.E130',
             ),
             Error(
                 "DecimalFields must define a 'max_digits' attribute.",
-                hint=None,
                 obj=field,
                 id='fields.E132',
             ),
@@ -342,13 +351,11 @@ class DecimalFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'decimal_places' must be a non-negative integer.",
-                hint=None,
                 obj=field,
                 id='fields.E131',
             ),
             Error(
                 "'max_digits' must be a positive integer.",
-                hint=None,
                 obj=field,
                 id='fields.E133',
             ),
@@ -364,13 +371,11 @@ class DecimalFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'decimal_places' must be a non-negative integer.",
-                hint=None,
                 obj=field,
                 id='fields.E131',
             ),
             Error(
                 "'max_digits' must be a positive integer.",
-                hint=None,
                 obj=field,
                 id='fields.E133',
             ),
@@ -386,7 +391,6 @@ class DecimalFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'max_digits' must be greater or equal to 'decimal_places'.",
-                hint=None,
                 obj=field,
                 id='fields.E134',
             ),
@@ -403,7 +407,8 @@ class DecimalFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class FileFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class FileFieldTests(SimpleTestCase):
 
     def test_valid_case(self):
         class Model(models.Model):
@@ -423,7 +428,6 @@ class FileFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'unique' is not a valid argument for a FileField.",
-                hint=None,
                 obj=field,
                 id='fields.E200',
             )
@@ -439,7 +443,6 @@ class FileFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'primary_key' is not a valid argument for a FileField.",
-                hint=None,
                 obj=field,
                 id='fields.E201',
             )
@@ -447,7 +450,8 @@ class FileFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class FilePathFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class FilePathFieldTests(SimpleTestCase):
 
     def test_forbidden_files_and_folders(self):
         class Model(models.Model):
@@ -458,7 +462,6 @@ class FilePathFieldTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "FilePathFields must have either 'allow_files' or 'allow_folders' set to True.",
-                hint=None,
                 obj=field,
                 id='fields.E140',
             ),
@@ -466,7 +469,8 @@ class FilePathFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class GenericIPAddressFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class GenericIPAddressFieldTests(SimpleTestCase):
 
     def test_non_nullable_blank(self):
         class Model(models.Model):
@@ -478,7 +482,6 @@ class GenericIPAddressFieldTests(IsolatedModelsTestCase):
             Error(
                 ('GenericIPAddressFields cannot have blank=True if null=False, '
                  'as blank values are stored as nulls.'),
-                hint=None,
                 obj=field,
                 id='fields.E150',
             ),
@@ -486,7 +489,8 @@ class GenericIPAddressFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class ImageFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class ImageFieldTests(SimpleTestCase):
 
     def test_pillow_installed(self):
         try:
@@ -513,7 +517,28 @@ class ImageFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class TimeFieldTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class IntegerFieldTests(SimpleTestCase):
+
+    def test_max_length_warning(self):
+        class Model(models.Model):
+            value = models.IntegerField(max_length=2)
+
+        value = Model._meta.get_field('value')
+        errors = Model.check()
+        expected = [
+            DjangoWarning(
+                "'max_length' is ignored when used with IntegerField",
+                hint="Remove 'max_length' from field",
+                obj=value,
+                id='fields.W122',
+            )
+        ]
+        self.assertEqual(errors, expected)
+
+
+@isolate_apps('invalid_models_tests')
+class TimeFieldTests(TestCase):
 
     def test_fix_default_value(self):
         class Model(models.Model):

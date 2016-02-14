@@ -1,17 +1,19 @@
 import re
 
 from django.conf import settings
-from django.contrib.gis.db.backends.base import BaseSpatialOperations
-from django.contrib.gis.db.backends.postgis.adapter import PostGISAdapter
+from django.contrib.gis.db.backends.base.operations import \
+    BaseSpatialOperations
 from django.contrib.gis.db.backends.utils import SpatialOperator
 from django.contrib.gis.geometry.backend import Geometry
 from django.contrib.gis.measure import Distance
 from django.core.exceptions import ImproperlyConfigured
-from django.db.backends.postgresql_psycopg2.base import DatabaseOperations
+from django.db.backends.postgresql.operations import DatabaseOperations
 from django.db.utils import ProgrammingError
 from django.utils.functional import cached_property
 
+from .adapter import PostGISAdapter
 from .models import PostGISGeometryColumns, PostGISSpatialRefSys
+from .pgraster import from_pgraster, get_pgraster_srid, to_pgraster
 
 
 class PostGISOperator(SpatialOperator):
@@ -29,31 +31,31 @@ class PostGISOperator(SpatialOperator):
 
 
 class PostGISDistanceOperator(PostGISOperator):
-    sql_template = '%(func)s(%(lhs)s, %(rhs)s) %(op)s %%s'
+    sql_template = '%(func)s(%(lhs)s, %(rhs)s) %(op)s %(value)s'
 
     def as_sql(self, connection, lookup, template_params, sql_params):
         if not lookup.lhs.output_field.geography and lookup.lhs.output_field.geodetic(connection):
             sql_template = self.sql_template
             if len(lookup.rhs) == 3 and lookup.rhs[-1] == 'spheroid':
                 template_params.update({'op': self.op, 'func': 'ST_Distance_Spheroid'})
-                sql_template = '%(func)s(%(lhs)s, %(rhs)s, %%s) %(op)s %%s'
+                sql_template = '%(func)s(%(lhs)s, %(rhs)s, %%s) %(op)s %(value)s'
+                # Using distance_spheroid requires the spheroid of the field as
+                # a parameter.
+                sql_params.insert(1, lookup.lhs.output_field._spheroid)
             else:
                 template_params.update({'op': self.op, 'func': 'ST_Distance_Sphere'})
             return sql_template % template_params, sql_params
         return super(PostGISDistanceOperator, self).as_sql(connection, lookup, template_params, sql_params)
 
 
-class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
-    compiler_module = 'django.contrib.gis.db.models.sql.compiler'
+class PostGISOperations(BaseSpatialOperations, DatabaseOperations):
     name = 'postgis'
     postgis = True
     geography = True
     geom_func_prefix = 'ST_'
     version_regex = re.compile(r'^(?P<major>\d)\.(?P<minor1>\d)\.(?P<minor2>\d+)')
-    valid_aggregates = {'Collect', 'Extent', 'Extent3D', 'MakeLine', 'Union'}
 
     Adapter = PostGISAdapter
-    Adaptor = Adapter  # Backwards-compatibility alias.
 
     gis_operators = {
         'bbcontains': PostGISOperator(op='~'),
@@ -67,13 +69,13 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         'left': PostGISOperator(op='<<'),
         'right': PostGISOperator(op='>>'),
         'strictly_below': PostGISOperator(op='<<|'),
-        'stricly_above': PostGISOperator(op='|>>'),
+        'strictly_above': PostGISOperator(op='|>>'),
         'same_as': PostGISOperator(op='~='),
         'exact': PostGISOperator(op='~='),  # alias of same_as
         'contains_properly': PostGISOperator(func='ST_ContainsProperly'),
         'coveredby': PostGISOperator(func='ST_CoveredBy', geography=True),
         'covers': PostGISOperator(func='ST_Covers', geography=True),
-        'crosses': PostGISOperator(func='ST_Crosses)'),
+        'crosses': PostGISOperator(func='ST_Crosses'),
         'disjoint': PostGISOperator(func='ST_Disjoint'),
         'equals': PostGISOperator(func='ST_Equals'),
         'intersects': PostGISOperator(func='ST_Intersects', geography=True),
@@ -86,6 +88,13 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         'distance_gte': PostGISDistanceOperator(func='ST_Distance', op='>=', geography=True),
         'distance_lt': PostGISDistanceOperator(func='ST_Distance', op='<', geography=True),
         'distance_lte': PostGISDistanceOperator(func='ST_Distance', op='<=', geography=True),
+    }
+
+    unsupported_functions = set()
+    function_names = {
+        'BoundingCircle': 'ST_MinimumBoundingCircle',
+        'MemSize': 'ST_Mem_Size',
+        'NumPoints': 'ST_NPoints',
     }
 
     def __init__(self, connection):
@@ -103,6 +112,7 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         self.distance_spheroid = prefix + 'distance_spheroid'
         self.envelope = prefix + 'Envelope'
         self.extent = prefix + 'Extent'
+        self.extent3d = prefix + '3DExtent'
         self.force_rhr = prefix + 'ForceRHR'
         self.geohash = prefix + 'GeoHash'
         self.geojson = prefix + 'AsGeoJson'
@@ -110,12 +120,14 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         self.intersection = prefix + 'Intersection'
         self.kml = prefix + 'AsKML'
         self.length = prefix + 'Length'
+        self.length3d = prefix + '3DLength'
         self.length_spheroid = prefix + 'length_spheroid'
         self.makeline = prefix + 'MakeLine'
         self.mem_size = prefix + 'mem_size'
         self.num_geom = prefix + 'NumGeometries'
         self.num_points = prefix + 'npoints'
         self.perimeter = prefix + 'Perimeter'
+        self.perimeter3d = prefix + '3DPerimeter'
         self.point_on_surface = prefix + 'PointOnSurface'
         self.polygonize = prefix + 'Polygonize'
         self.reverse = prefix + 'Reverse'
@@ -127,34 +139,6 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         self.translate = prefix + 'Translate'
         self.union = prefix + 'Union'
         self.unionagg = prefix + 'Union'
-
-    # Following "attributes" are properties due to the spatial_version check and
-    # to delay database access
-    @property
-    def extent3d(self):
-        if self.spatial_version >= (2, 0, 0):
-            return self.geom_func_prefix + '3DExtent'
-        else:
-            return self.geom_func_prefix + 'Extent3D'
-
-    @property
-    def length3d(self):
-        if self.spatial_version >= (2, 0, 0):
-            return self.geom_func_prefix + '3DLength'
-        else:
-            return self.geom_func_prefix + 'Length3D'
-
-    @property
-    def perimeter3d(self):
-        if self.spatial_version >= (2, 0, 0):
-            return self.geom_func_prefix + '3DPerimeter'
-        else:
-            return self.geom_func_prefix + 'Perimeter3D'
-
-    @property
-    def geometry(self):
-        # Native geometry type support added in PostGIS 2.0.
-        return self.spatial_version >= (2, 0, 0)
 
     @cached_property
     def spatial_version(self):
@@ -168,43 +152,45 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         if hasattr(settings, 'POSTGIS_VERSION'):
             version = settings.POSTGIS_VERSION
         else:
+            # Run a basic query to check the status of the connection so we're
+            # sure we only raise the error below if the problem comes from
+            # PostGIS and not from PostgreSQL itself (see #24862).
+            self._get_postgis_func('version')
+
             try:
                 vtup = self.postgis_version_tuple()
             except ProgrammingError:
                 raise ImproperlyConfigured(
-                    'Cannot determine PostGIS version for database "%s". '
-                    'GeoDjango requires at least PostGIS version 1.5. '
+                    'Cannot determine PostGIS version for database "%s" '
+                    'using command "SELECT postgis_lib_version()". '
+                    'GeoDjango requires at least PostGIS version 2.0. '
                     'Was the database created from a spatial database '
                     'template?' % self.connection.settings_dict['NAME']
                 )
             version = vtup[1:]
         return version
 
-    def check_aggregate_support(self, aggregate):
-        """
-        Checks if the given aggregate name is supported (that is, if it's
-        in `self.valid_aggregates`).
-        """
-        agg_name = aggregate.__class__.__name__
-        return agg_name in self.valid_aggregates
-
-    def convert_extent(self, box):
+    def convert_extent(self, box, srid):
         """
         Returns a 4-tuple extent for the `Extent` aggregate by converting
         the bounding box text returned by PostGIS (`box` argument), for
         example: "BOX(-90.0 30.0, -85.0 40.0)".
         """
+        if box is None:
+            return None
         ll, ur = box[4:-1].split(',')
         xmin, ymin = map(float, ll.split())
         xmax, ymax = map(float, ur.split())
         return (xmin, ymin, xmax, ymax)
 
-    def convert_extent3d(self, box3d):
+    def convert_extent3d(self, box3d, srid):
         """
         Returns a 6-tuple extent for the `Extent3D` aggregate by converting
         the 3d bounding-box text returned by PostGIS (`box3d` argument), for
         example: "BOX3D(-90.0 30.0 1, -85.0 40.0 2)".
         """
+        if box3d is None:
+            return None
         ll, ur = box3d[6:-1].split(',')
         xmin, ymin, zmin = map(float, ll.split())
         xmax, ymax, zmax = map(float, ur.split())
@@ -221,28 +207,25 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
 
     def geo_db_type(self, f):
         """
-        Return the database field type for the given geometry field.
-        Typically this is `None` because geometry columns are added via
-        the `AddGeometryColumn` stored procedure, unless the field
-        has been specified to be of geography type instead.
+        Return the database field type for the given spatial field.
         """
-        if f.geography:
+        if f.geom_type == 'RASTER':
+            return 'raster'
+        elif f.geography:
             if f.srid != 4326:
                 raise NotImplementedError('PostGIS only supports geography columns with an SRID of 4326.')
 
             return 'geography(%s,%d)' % (f.geom_type, f.srid)
-        elif self.geometry:
-            # Postgis 2.0 supports type-based geometries.
+        else:
+            # Type-based geometries.
             # TODO: Support 'M' extension.
             if f.dim == 3:
                 geom_type = f.geom_type + 'Z'
             else:
                 geom_type = f.geom_type
             return 'geometry(%s,%d)' % (geom_type, f.srid)
-        else:
-            return None
 
-    def get_distance(self, f, dist_val, lookup_type):
+    def get_distance(self, f, dist_val, lookup_type, handle_spheroid=True):
         """
         Retrieve the distance parameters for the given geometry field,
         distance lookup value, and the distance lookup type.
@@ -250,13 +233,10 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         This is the most complex implementation of the spatial backends due to
         what is supported on geodetic geometry columns vs. what's available on
         projected geometry columns.  In addition, it has to take into account
-        the geography column type newly introduced in PostGIS 1.5.
+        the geography column type.
         """
-        # Getting the distance parameter and any options.
-        if len(dist_val) == 1:
-            value, option = dist_val[0], None
-        else:
-            value, option = dist_val
+        # Getting the distance parameter
+        value = dist_val[0]
 
         # Shorthand boolean flags.
         geodetic = f.geodetic(self.connection)
@@ -276,13 +256,17 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
             # Assuming the distance is in the units of the field.
             dist_param = value
 
-        if (not geography and geodetic and lookup_type != 'dwithin'
-                and option == 'spheroid'):
-            # using distance_spheroid requires the spheroid of the field as
-            # a parameter.
-            return [f._spheroid, dist_param]
-        else:
-            return [dist_param]
+        params = [dist_param]
+        # handle_spheroid *might* be dropped in Django 2.0 as PostGISDistanceOperator
+        # also handles it (#25524).
+        if handle_spheroid and len(dist_val) > 1:
+            option = dist_val[1]
+            if (not geography and geodetic and lookup_type != 'dwithin'
+                    and option == 'spheroid'):
+                # using distance_spheroid requires the spheroid of the field as
+                # a parameter.
+                params.insert(0, f._spheroid)
+        return params
 
     def get_geom_placeholder(self, f, value, compiler):
         """
@@ -290,10 +274,21 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         SRID of the field.  Specifically, this routine will substitute in the
         ST_Transform() function call.
         """
-        if value is None or value.srid == f.srid:
-            placeholder = '%s'
+        # Get the srid for this object
+        if value is None:
+            value_srid = None
+        elif f.geom_type == 'RASTER':
+            value_srid = get_pgraster_srid(value)
         else:
-            # Adding Transform() to the SQL placeholder.
+            value_srid = value.srid
+
+        # Adding Transform() to the SQL placeholder if the value srid
+        # is not equal to the field srid.
+        if value_srid is None or value_srid == f.srid:
+            placeholder = '%s'
+        elif f.geom_type == 'RASTER':
+            placeholder = '%s((%%s)::raster, %s)' % (self.transform, f.srid)
+        else:
             placeholder = '%s(%%s, %s)' % (self.transform, f.srid)
 
         if hasattr(value, 'as_sql'):
@@ -365,20 +360,11 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
         else:
             raise Exception('Could not determine PROJ.4 version from PostGIS.')
 
-    def spatial_aggregate_sql(self, agg):
-        """
-        Returns the spatial aggregate SQL template and function for the
-        given Aggregate instance.
-        """
-        agg_name = agg.__class__.__name__
-        if not self.check_aggregate_support(agg):
-            raise NotImplementedError('%s spatial aggregate is not implemented for this backend.' % agg_name)
-        agg_name = agg_name.lower()
-        if agg_name == 'union':
-            agg_name += 'agg'
-        sql_template = '%(function)s(%(expressions)s)'
-        sql_function = getattr(self, agg_name)
-        return sql_template, sql_function
+    def spatial_aggregate_name(self, agg_name):
+        if agg_name == 'Extent3D':
+            return self.extent3d
+        else:
+            return self.geom_func_prefix + agg_name
 
     # Routines for getting the OGC-compliant models.
     def geometry_columns(self):
@@ -386,3 +372,11 @@ class PostGISOperations(DatabaseOperations, BaseSpatialOperations):
 
     def spatial_ref_sys(self):
         return PostGISSpatialRefSys
+
+    # Methods to convert between PostGIS rasters and dicts that are
+    # readable by GDALRaster.
+    def parse_raster(self, value):
+        return from_pgraster(value)
+
+    def deconstruct_raster(self, value):
+        return to_pgraster(value)

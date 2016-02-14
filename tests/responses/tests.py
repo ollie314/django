@@ -2,7 +2,10 @@
 
 from __future__ import unicode_literals
 
+import io
+
 from django.conf import settings
+from django.core.cache import cache
 from django.http import HttpResponse
 from django.http.response import HttpResponseBase
 from django.test import SimpleTestCase
@@ -33,12 +36,32 @@ class HttpResponseBaseTests(SimpleTestCase):
         with self.assertRaisesMessage(IOError, 'This HttpResponseBase instance cannot tell its position'):
             r.tell()
 
+    def test_setdefault(self):
+        """
+        HttpResponseBase.setdefault() should not change an existing header
+        and should be case insensitive.
+        """
+        r = HttpResponseBase()
+
+        r['Header'] = 'Value'
+        r.setdefault('header', 'changed')
+        self.assertEqual(r['header'], 'Value')
+
+        r.setdefault('x-header', 'DefaultValue')
+        self.assertEqual(r['X-Header'], 'DefaultValue')
+
 
 class HttpResponseTests(SimpleTestCase):
     def test_status_code(self):
-        resp = HttpResponse(status=418)
-        self.assertEqual(resp.status_code, 418)
-        self.assertEqual(resp.reason_phrase, "I'M A TEAPOT")
+        resp = HttpResponse(status=503)
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.reason_phrase, "Service Unavailable")
+
+    def test_change_status_code(self):
+        resp = HttpResponse()
+        resp.status_code = 503
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.reason_phrase, "Service Unavailable")
 
     def test_reason_phrase(self):
         reason = "I'm an anarchist coffee pot on crack."
@@ -87,3 +110,26 @@ class HttpResponseTests(SimpleTestCase):
 
         response = HttpResponse(iso_content, content_type='text/plain')
         self.assertContains(response, iso_content)
+
+    def test_repr(self):
+        response = HttpResponse(content="Café :)".encode(UTF8), status=201)
+        expected = '<HttpResponse status_code=201, "text/html; charset=utf-8">'
+        self.assertEqual(repr(response), expected)
+
+    def test_wrap_textiowrapper(self):
+        content = "Café :)"
+        r = HttpResponse()
+        with io.TextIOWrapper(r, UTF8) as buf:
+            buf.write(content)
+        self.assertEqual(r.content, content.encode(UTF8))
+
+    def test_generator_cache(self):
+        generator = ("{}".format(i) for i in range(10))
+        response = HttpResponse(content=generator)
+        self.assertEqual(response.content, b'0123456789')
+        with self.assertRaises(StopIteration):
+            next(generator)
+
+        cache.set('my-response-key', response)
+        response = cache.get('my-response-key')
+        self.assertEqual(response.content, b'0123456789')

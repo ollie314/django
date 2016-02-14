@@ -1,9 +1,9 @@
 from django.http import HttpResponse
-from django.test import TestCase, RequestFactory
+from django.test import RequestFactory, SimpleTestCase
 from django.test.utils import override_settings
 
 
-class SecurityMiddlewareTest(TestCase):
+class SecurityMiddlewareTest(SimpleTestCase):
     @property
     def middleware(self):
         from django.middleware.security import SecurityMiddleware
@@ -86,10 +86,7 @@ class SecurityMiddlewareTest(TestCase):
         "includeSubDomains" tag to the response.
         """
         response = self.process_response(secure=True)
-        self.assertEqual(
-            response["strict-transport-security"],
-            "max-age=600; includeSubDomains",
-            )
+        self.assertEqual(response["strict-transport-security"], "max-age=600; includeSubDomains")
 
     @override_settings(
         SECURE_HSTS_SECONDS=600, SECURE_HSTS_INCLUDE_SUBDOMAINS=False)

@@ -1,12 +1,10 @@
 from __future__ import unicode_literals
 
 import copy
-import os
 import re
 import sys
 from io import BytesIO
 from itertools import chain
-from pprint import pformat
 
 from django.conf import settings
 from django.core import signing
@@ -14,15 +12,16 @@ from django.core.exceptions import DisallowedHost, ImproperlyConfigured
 from django.core.files import uploadhandler
 from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.utils import six
-from django.utils.datastructures import MultiValueDict, ImmutableList
+from django.utils.datastructures import ImmutableList, MultiValueDict
 from django.utils.encoding import (
-    force_bytes, force_text, force_str, escape_uri_path, iri_to_uri,
+    escape_uri_path, force_bytes, force_str, force_text, iri_to_uri,
 )
-from django.utils.six.moves.urllib.parse import parse_qsl, urlencode, quote, urljoin, urlsplit
-
+from django.utils.http import is_same_domain
+from django.utils.six.moves.urllib.parse import (
+    parse_qsl, quote, urlencode, urljoin, urlsplit,
+)
 
 RAISE_ERROR = object()
-absolute_http_url_re = re.compile(r"^https?://", re.I)
 host_validation_re = re.compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9:]+\])(:\d+)?$")
 
 
@@ -62,12 +61,21 @@ class HttpRequest(object):
         self.method = None
         self.resolver_match = None
         self._post_parse_error = False
+        self.content_type = None
+        self.content_params = None
 
     def __repr__(self):
-        return build_request_repr(self)
+        if self.method is None or not self.get_full_path():
+            return force_str('<%s>' % self.__class__.__name__)
+        return force_str(
+            '<%s: %s %r>' % (self.__class__.__name__, self.method, force_str(self.get_full_path()))
+        )
 
-    def get_host(self):
-        """Returns the HTTP host using the environment or request headers."""
+    def _get_raw_host(self):
+        """
+        Return the HTTP host using the environment or request headers. Skip
+        allowed hosts protection, so may return an insecure host.
+        """
         # We try three options, in order of decreasing preference.
         if settings.USE_X_FORWARDED_HOST and (
                 'HTTP_X_FORWARDED_HOST' in self.META):
@@ -77,9 +85,14 @@ class HttpRequest(object):
         else:
             # Reconstruct the host using the algorithm from PEP 333.
             host = self.META['SERVER_NAME']
-            server_port = str(self.META['SERVER_PORT'])
+            server_port = self.get_port()
             if server_port != ('443' if self.is_secure() else '80'):
                 host = '%s:%s' % (host, server_port)
+        return host
+
+    def get_host(self):
+        """Return the HTTP host using the environment or request headers."""
+        host = self._get_raw_host()
 
         # There is no hostname validation when DEBUG=True
         if settings.DEBUG:
@@ -96,11 +109,20 @@ class HttpRequest(object):
                 msg += " The domain name provided is not valid according to RFC 1034/1035."
             raise DisallowedHost(msg)
 
-    def get_full_path(self):
+    def get_port(self):
+        """Return the port number for the request as a string."""
+        if settings.USE_X_FORWARDED_PORT and 'HTTP_X_FORWARDED_PORT' in self.META:
+            port = self.META['HTTP_X_FORWARDED_PORT']
+        else:
+            port = self.META['SERVER_PORT']
+        return str(port)
+
+    def get_full_path(self, force_append_slash=False):
         # RFC 3986 requires query string arguments to be in the ASCII range.
         # Rather than crash if this doesn't happen, we encode defensively.
-        return '%s%s' % (
+        return '%s%s%s' % (
             escape_uri_path(self.path),
+            '/' if force_append_slash and not self.path.endswith('/') else '',
             ('?' + iri_to_uri(self.META.get('QUERY_STRING', ''))) if self.META.get('QUERY_STRING', '') else ''
         )
 
@@ -126,6 +148,17 @@ class HttpRequest(object):
             else:
                 raise
         return value
+
+    def get_raw_uri(self):
+        """
+        Return an absolute URI from variables available in this request. Skip
+        allowed hosts protection, so may return insecure URI.
+        """
+        return '{scheme}://{host}{path}'.format(
+            scheme=self.scheme,
+            host=self._get_raw_host(),
+            path=self.get_full_path(),
+        )
 
     def build_absolute_uri(self, location=None):
         """
@@ -153,11 +186,14 @@ class HttpRequest(object):
         return iri_to_uri(location)
 
     def _get_scheme(self):
-        return 'https' if os.environ.get("HTTPS") == "on" else 'http'
+        """
+        Hook for subclasses like WSGIRequest to implement. Returns 'http' by
+        default.
+        """
+        return 'http'
 
     @property
     def scheme(self):
-        # First, check the SECURE_PROXY_SSL_HEADER setting.
         if settings.SECURE_PROXY_SSL_HEADER:
             try:
                 header, value = settings.SECURE_PROXY_SSL_HEADER
@@ -165,10 +201,8 @@ class HttpRequest(object):
                 raise ImproperlyConfigured(
                     'The SECURE_PROXY_SSL_HEADER setting must be a tuple containing two values.'
                 )
-            if self.META.get(header, None) == value:
+            if self.META.get(header) == value:
                 return 'https'
-        # Failing that, fall back to _get_scheme(), which is a hook for
-        # subclasses to implement.
         return self._get_scheme()
 
     def is_secure(self):
@@ -246,7 +280,7 @@ class HttpRequest(object):
             self._mark_post_parse_error()
             return
 
-        if self.META.get('CONTENT_TYPE', '').startswith('multipart/form-data'):
+        if self.content_type == 'multipart/form-data':
             if hasattr(self, '_body'):
                 # Use already read data
                 data = BytesIO(self._body)
@@ -264,7 +298,7 @@ class HttpRequest(object):
                 # empty POST
                 self._mark_post_parse_error()
                 raise
-        elif self.META.get('CONTENT_TYPE', '').startswith('application/x-www-form-urlencoded'):
+        elif self.content_type == 'application/x-www-form-urlencoded':
             self._post, self._files = QueryDict(self.body, encoding=self._encoding), MultiValueDict()
         else:
             self._post, self._files = QueryDict('', encoding=self._encoding), MultiValueDict()
@@ -445,65 +479,21 @@ class QueryDict(MultiValueDict):
                 'next=%2Fa%26b%2F'
                 >>> q.urlencode(safe='/')
                 'next=/a%26b/'
-
         """
         output = []
         if safe:
             safe = force_bytes(safe, self.encoding)
-            encode = lambda k, v: '%s=%s' % ((quote(k, safe), quote(v, safe)))
+
+            def encode(k, v):
+                return '%s=%s' % ((quote(k, safe), quote(v, safe)))
         else:
-            encode = lambda k, v: urlencode({k: v})
+            def encode(k, v):
+                return urlencode({k: v})
         for k, list_ in self.lists():
             k = force_bytes(k, self.encoding)
-            output.extend([encode(k, force_bytes(v, self.encoding))
-                           for v in list_])
+            output.extend(encode(k, force_bytes(v, self.encoding))
+                          for v in list_)
         return '&'.join(output)
-
-
-def build_request_repr(request, path_override=None, GET_override=None,
-                       POST_override=None, COOKIES_override=None,
-                       META_override=None):
-    """
-    Builds and returns the request's representation string. The request's
-    attributes may be overridden by pre-processed values.
-    """
-    # Since this is called as part of error handling, we need to be very
-    # robust against potentially malformed input.
-    try:
-        get = (pformat(GET_override)
-               if GET_override is not None
-               else pformat(request.GET))
-    except Exception:
-        get = '<could not parse>'
-    if request._post_parse_error:
-        post = '<could not parse>'
-    else:
-        try:
-            post = (pformat(POST_override)
-                    if POST_override is not None
-                    else pformat(request.POST))
-        except Exception:
-            post = '<could not parse>'
-    try:
-        cookies = (pformat(COOKIES_override)
-                   if COOKIES_override is not None
-                   else pformat(request.COOKIES))
-    except Exception:
-        cookies = '<could not parse>'
-    try:
-        meta = (pformat(META_override)
-                if META_override is not None
-                else pformat(request.META))
-    except Exception:
-        meta = '<could not parse>'
-    path = path_override if path_override is not None else request.path
-    return force_str('<%s\npath:%s,\nGET:%s,\nPOST:%s,\nCOOKIES:%s,\nMETA:%s>' %
-                     (request.__class__.__name__,
-                      path,
-                      six.text_type(get),
-                      six.text_type(post),
-                      six.text_type(cookies),
-                      six.text_type(meta)))
 
 
 # It's neither necessary nor appropriate to use
@@ -558,20 +548,11 @@ def validate_host(host, allowed_hosts):
     already had the port, if any, stripped off.
 
     Return ``True`` for a valid host, ``False`` otherwise.
-
     """
     host = host[:-1] if host.endswith('.') else host
 
     for pattern in allowed_hosts:
-        pattern = pattern.lower()
-        match = (
-            pattern == '*' or
-            pattern.startswith('.') and (
-                host.endswith(pattern) or host == pattern[1:]
-            ) or
-            pattern == host
-        )
-        if match:
+        if pattern == '*' or is_same_domain(host, pattern):
             return True
 
     return False

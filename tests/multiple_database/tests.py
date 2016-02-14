@@ -7,14 +7,14 @@ from operator import attrgetter
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.core import management
-from django.db import connections, router, DEFAULT_DB_ALIAS, transaction
+from django.db import DEFAULT_DB_ALIAS, connections, router, transaction
 from django.db.models import signals
 from django.db.utils import ConnectionRouter
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils.six import StringIO
 
 from .models import Book, Person, Pet, Review, UserProfile
-from .routers import TestRouter, AuthRouter, WriteRouter
+from .routers import AuthRouter, TestRouter, WriteRouter
 
 
 class QueryTestCase(TestCase):
@@ -49,11 +49,8 @@ class QueryTestCase(TestCase):
         except Book.DoesNotExist:
             self.fail('"Pro Django" should exist on default database')
 
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.using('other').get,
-            title="Pro Django"
-        )
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('other').get(title="Pro Django")
 
         try:
             Book.objects.get(title="Dive into Python")
@@ -61,11 +58,8 @@ class QueryTestCase(TestCase):
         except Book.DoesNotExist:
             self.fail('"Dive into Python" should exist on default database')
 
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.using('other').get,
-            title="Dive into Python"
-        )
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('other').get(title="Dive into Python")
 
     def test_other_creation(self):
         "Objects created on another database don't leak onto the default database"
@@ -85,32 +79,38 @@ class QueryTestCase(TestCase):
         except Book.DoesNotExist:
             self.fail('"Pro Django" should exist on other database')
 
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.get,
-            title="Pro Django"
-        )
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.using('default').get,
-            title="Pro Django"
-        )
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.get(title="Pro Django")
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('default').get(title="Pro Django")
 
         try:
             Book.objects.using('other').get(title="Dive into Python")
         except Book.DoesNotExist:
             self.fail('"Dive into Python" should exist on other database')
 
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.get,
-            title="Dive into Python"
-        )
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.using('default').get,
-            title="Dive into Python"
-        )
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.get(title="Dive into Python")
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('default').get(title="Dive into Python")
+
+    def test_refresh(self):
+        dive = Book()
+        dive.title = "Dive into Python"
+        dive = Book()
+        dive.title = "Dive into Python"
+        dive.published = datetime.date(2009, 5, 4)
+        dive.save(using='other')
+        dive.published = datetime.date(2009, 5, 4)
+        dive.save(using='other')
+        dive2 = Book.objects.using('other').get()
+        dive2.title = "Dive into Python (on default)"
+        dive2.save(using='default')
+        dive.refresh_from_db()
+        self.assertEqual(dive.title, "Dive into Python")
+        dive.refresh_from_db(using='default')
+        self.assertEqual(dive.title, "Dive into Python (on default)")
+        self.assertEqual(dive._state.db, "default")
 
     def test_basic_queries(self):
         "Queries are constrained to a single database"
@@ -119,20 +119,24 @@ class QueryTestCase(TestCase):
 
         dive = Book.objects.using('other').get(published=datetime.date(2009, 5, 4))
         self.assertEqual(dive.title, "Dive into Python")
-        self.assertRaises(Book.DoesNotExist, Book.objects.using('default').get, published=datetime.date(2009, 5, 4))
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('default').get(published=datetime.date(2009, 5, 4))
 
         dive = Book.objects.using('other').get(title__icontains="dive")
         self.assertEqual(dive.title, "Dive into Python")
-        self.assertRaises(Book.DoesNotExist, Book.objects.using('default').get, title__icontains="dive")
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('default').get(title__icontains="dive")
 
         dive = Book.objects.using('other').get(title__iexact="dive INTO python")
         self.assertEqual(dive.title, "Dive into Python")
-        self.assertRaises(Book.DoesNotExist, Book.objects.using('default').get, title__iexact="dive INTO python")
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('default').get(title__iexact="dive INTO python")
 
         dive = Book.objects.using('other').get(published__year=2009)
         self.assertEqual(dive.title, "Dive into Python")
         self.assertEqual(dive.published, datetime.date(2009, 5, 4))
-        self.assertRaises(Book.DoesNotExist, Book.objects.using('default').get, published__year=2009)
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('default').get(published__year=2009)
 
         years = Book.objects.using('other').dates('published', 'year')
         self.assertEqual([o.year for o in years], [2009])
@@ -159,8 +163,8 @@ class QueryTestCase(TestCase):
         mark = Person.objects.using('other').create(name="Mark Pilgrim")
 
         # Save the author relations
-        pro.authors = [marty]
-        dive.authors = [mark]
+        pro.authors.set([marty])
+        dive.authors.set([mark])
 
         # Inspect the m2m tables directly.
         # There should be 1 entry in each database
@@ -168,15 +172,23 @@ class QueryTestCase(TestCase):
         self.assertEqual(Book.authors.through.objects.using('other').count(), 1)
 
         # Check that queries work across m2m joins
-        self.assertEqual(list(Book.objects.using('default').filter(authors__name='Marty Alchin').values_list('title', flat=True)),
-            ['Pro Django'])
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='Marty Alchin').values_list('title', flat=True)),
-            [])
+        self.assertEqual(
+            list(Book.objects.using('default').filter(authors__name='Marty Alchin').values_list('title', flat=True)),
+            ['Pro Django']
+        )
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='Marty Alchin').values_list('title', flat=True)),
+            []
+        )
 
-        self.assertEqual(list(Book.objects.using('default').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
-            [])
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
-            ['Dive into Python'])
+        self.assertEqual(
+            list(Book.objects.using('default').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
+            ['Dive into Python']
+        )
 
         # Reget the objects to clear caches
         dive = Book.objects.using('other').get(title="Dive into Python")
@@ -198,39 +210,57 @@ class QueryTestCase(TestCase):
         mark = Person.objects.using('other').create(name="Mark Pilgrim")
 
         # Save the author relations
-        dive.authors = [mark]
+        dive.authors.set([mark])
 
         # Add a second author
         john = Person.objects.using('other').create(name="John Smith")
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
-            [])
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
+            []
+        )
 
         dive.authors.add(john)
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
-            ['Dive into Python'])
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
-            ['Dive into Python'])
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
+            ['Dive into Python']
+        )
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
+            ['Dive into Python']
+        )
 
         # Remove the second author
         dive.authors.remove(john)
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
-            ['Dive into Python'])
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
-            [])
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
+            ['Dive into Python']
+        )
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
+            []
+        )
 
         # Clear all authors
         dive.authors.clear()
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
-            [])
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
-            [])
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='John Smith').values_list('title', flat=True)),
+            []
+        )
 
         # Create an author through the m2m interface
         dive.authors.create(name='Jane Brown')
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
-            [])
-        self.assertEqual(list(Book.objects.using('other').filter(authors__name='Jane Brown').values_list('title', flat=True)),
-            ['Dive into Python'])
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='Mark Pilgrim').values_list('title', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Book.objects.using('other').filter(authors__name='Jane Brown').values_list('title', flat=True)),
+            ['Dive into Python']
+        )
 
     def test_m2m_reverse_operations(self):
         "M2M reverse manipulations are all constrained to a single DB"
@@ -241,7 +271,7 @@ class QueryTestCase(TestCase):
         mark = Person.objects.using('other').create(name="Mark Pilgrim")
 
         # Save the author relations
-        dive.authors = [mark]
+        dive.authors.set([mark])
 
         # Create a second book on the other database
         grease = Book.objects.using('other').create(title="Greasemonkey Hacks",
@@ -249,31 +279,53 @@ class QueryTestCase(TestCase):
 
         # Add a books to the m2m
         mark.book_set.add(grease)
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
-            ['Mark Pilgrim'])
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Greasemonkey Hacks').values_list('name', flat=True)),
-            ['Mark Pilgrim'])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
+            ['Mark Pilgrim']
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(book__title='Greasemonkey Hacks').values_list('name', flat=True)
+            ),
+            ['Mark Pilgrim']
+        )
 
         # Remove a book from the m2m
         mark.book_set.remove(grease)
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
-            ['Mark Pilgrim'])
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Greasemonkey Hacks').values_list('name', flat=True)),
-            [])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
+            ['Mark Pilgrim']
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(book__title='Greasemonkey Hacks').values_list('name', flat=True)
+            ),
+            []
+        )
 
         # Clear the books associated with mark
         mark.book_set.clear()
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
-            [])
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Greasemonkey Hacks').values_list('name', flat=True)),
-            [])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(book__title='Greasemonkey Hacks').values_list('name', flat=True)
+            ),
+            []
+        )
 
         # Create a book through the m2m interface
         mark.book_set.create(title="Dive into HTML5", published=datetime.date(2020, 1, 1))
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
-            [])
-        self.assertEqual(list(Person.objects.using('other').filter(book__title='Dive into HTML5').values_list('name', flat=True)),
-            ['Mark Pilgrim'])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(book__title='Dive into Python').values_list('name', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Person.objects.using('other').filter(book__title='Dive into HTML5').values_list('name', flat=True)),
+            ['Mark Pilgrim']
+        )
 
     def test_m2m_cross_database_protection(self):
         "Operations that involve sharing M2M objects across databases raise an error"
@@ -291,7 +343,7 @@ class QueryTestCase(TestCase):
         # Set a foreign key set with an object from a different database
         with self.assertRaises(ValueError):
             with transaction.atomic(using='default'):
-                marty.edited = [pro, dive]
+                marty.edited.set([pro, dive])
 
         # Add to an m2m with an object from a different database
         with self.assertRaises(ValueError):
@@ -301,7 +353,7 @@ class QueryTestCase(TestCase):
         # Set a m2m with an object from a different database
         with self.assertRaises(ValueError):
             with transaction.atomic(using='default'):
-                marty.book_set = [pro, dive]
+                marty.book_set.set([pro, dive])
 
         # Add to a reverse m2m with an object from a different database
         with self.assertRaises(ValueError):
@@ -311,7 +363,7 @@ class QueryTestCase(TestCase):
         # Set a reverse m2m with an object from a different database
         with self.assertRaises(ValueError):
             with transaction.atomic(using='other'):
-                dive.authors = [mark, marty]
+                dive.authors.set([mark, marty])
 
     def test_m2m_deletion(self):
         "Cascaded deletions of m2m relations issue queries on the right database"
@@ -320,7 +372,7 @@ class QueryTestCase(TestCase):
                                                   published=datetime.date(2009, 5, 4))
 
         mark = Person.objects.using('other').create(name="Mark Pilgrim")
-        dive.authors = [mark]
+        dive.authors.set([mark])
 
         # Check the initial state
         self.assertEqual(Person.objects.using('default').count(), 0)
@@ -348,7 +400,7 @@ class QueryTestCase(TestCase):
         # Now try deletion in the reverse direction. Set up the relation again
         dive = Book.objects.using('other').create(title="Dive into Python",
                                                   published=datetime.date(2009, 5, 4))
-        dive.authors = [mark]
+        dive.authors.set([mark])
 
         # Check the initial state
         self.assertEqual(Person.objects.using('default').count(), 0)
@@ -401,15 +453,27 @@ class QueryTestCase(TestCase):
         self.assertEqual(dive.editor.name, "Chris Mills")
 
         # Check that queries work across foreign key joins
-        self.assertEqual(list(Person.objects.using('default').filter(edited__title='Pro Django').values_list('name', flat=True)),
-            ['George Vilches'])
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Pro Django').values_list('name', flat=True)),
-            [])
+        self.assertEqual(
+            list(Person.objects.using('default').filter(edited__title='Pro Django').values_list('name', flat=True)),
+            ['George Vilches']
+        )
+        self.assertEqual(
+            list(Person.objects.using('other').filter(edited__title='Pro Django').values_list('name', flat=True)),
+            []
+        )
 
-        self.assertEqual(list(Person.objects.using('default').filter(edited__title='Dive into Python').values_list('name', flat=True)),
-            [])
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)),
-            ['Chris Mills'])
+        self.assertEqual(
+            list(
+                Person.objects.using('default').filter(edited__title='Dive into Python').values_list('name', flat=True)
+            ),
+            []
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)
+            ),
+            ['Chris Mills']
+        )
 
         # Reget the objects to clear caches
         chris = Person.objects.using('other').get(name="Chris Mills")
@@ -432,37 +496,65 @@ class QueryTestCase(TestCase):
 
         # Add a second book edited by chris
         html5 = Book.objects.using('other').create(title="Dive into HTML5", published=datetime.date(2010, 3, 15))
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
-            [])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
+            []
+        )
 
         chris.edited.add(html5)
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
-            ['Chris Mills'])
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)),
-            ['Chris Mills'])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
+            ['Chris Mills']
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)
+            ),
+            ['Chris Mills']
+        )
 
         # Remove the second editor
         chris.edited.remove(html5)
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
-            [])
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)),
-            ['Chris Mills'])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)
+            ),
+            ['Chris Mills']
+        )
 
         # Clear all edited books
         chris.edited.clear()
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
-            [])
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)),
-            [])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)
+            ),
+            []
+        )
 
         # Create an author through the m2m interface
         chris.edited.create(title='Dive into Water', published=datetime.date(2010, 3, 15))
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
-            [])
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into Water').values_list('name', flat=True)),
-            ['Chris Mills'])
-        self.assertEqual(list(Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)),
-            [])
+        self.assertEqual(
+            list(Person.objects.using('other').filter(edited__title='Dive into HTML5').values_list('name', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Person.objects.using('other').filter(edited__title='Dive into Water').values_list('name', flat=True)),
+            ['Chris Mills']
+        )
+        self.assertEqual(
+            list(
+                Person.objects.using('other').filter(edited__title='Dive into Python').values_list('name', flat=True)
+            ),
+            []
+        )
 
     def test_foreign_key_cross_database_protection(self):
         "Operations that involve sharing FK objects across databases raise an error"
@@ -483,7 +575,7 @@ class QueryTestCase(TestCase):
         # Set a foreign key set with an object from a different database
         with self.assertRaises(ValueError):
             with transaction.atomic(using='default'):
-                marty.edited = [pro, dive]
+                marty.edited.set([pro, dive])
 
         # Add to a foreign key set with an object from a different database
         with self.assertRaises(ValueError):
@@ -516,7 +608,7 @@ class QueryTestCase(TestCase):
         "ForeignKey.validate() uses the correct database"
         mickey = Person.objects.using('other').create(name="Mickey")
         pluto = Pet.objects.using('other').create(name="Pluto", owner=mickey)
-        self.assertEqual(None, pluto.full_clean())
+        self.assertIsNone(pluto.full_clean())
 
     def test_o2o_separation(self):
         "OneToOne fields are constrained to a single database"
@@ -536,15 +628,35 @@ class QueryTestCase(TestCase):
         self.assertEqual(bob.userprofile.flavor, "crunchy frog")
 
         # Check that queries work across joins
-        self.assertEqual(list(User.objects.using('default').filter(userprofile__flavor='chocolate').values_list('username', flat=True)),
-            ['alice'])
-        self.assertEqual(list(User.objects.using('other').filter(userprofile__flavor='chocolate').values_list('username', flat=True)),
-            [])
+        self.assertEqual(
+            list(
+                User.objects.using('default')
+                .filter(userprofile__flavor='chocolate').values_list('username', flat=True)
+            ),
+            ['alice']
+        )
+        self.assertEqual(
+            list(
+                User.objects.using('other')
+                .filter(userprofile__flavor='chocolate').values_list('username', flat=True)
+            ),
+            []
+        )
 
-        self.assertEqual(list(User.objects.using('default').filter(userprofile__flavor='crunchy frog').values_list('username', flat=True)),
-            [])
-        self.assertEqual(list(User.objects.using('other').filter(userprofile__flavor='crunchy frog').values_list('username', flat=True)),
-            ['bob'])
+        self.assertEqual(
+            list(
+                User.objects.using('default')
+                .filter(userprofile__flavor='crunchy frog').values_list('username', flat=True)
+            ),
+            []
+        )
+        self.assertEqual(
+            list(
+                User.objects.using('other')
+                .filter(userprofile__flavor='crunchy frog').values_list('username', flat=True)
+            ),
+            ['bob']
+        )
 
         # Reget the objects to clear caches
         alice_profile = UserProfile.objects.using('default').get(flavor='chocolate')
@@ -663,38 +775,58 @@ class QueryTestCase(TestCase):
         review1 = Review.objects.using('other').create(source="Python Weekly", content_object=dive)
         review2 = Review.objects.using('other').create(source="Python Monthly", content_object=temp)
 
-        self.assertEqual(list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
-            [])
-        self.assertEqual(list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
-            ['Python Weekly'])
+        self.assertEqual(
+            list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
+            ['Python Weekly']
+        )
 
         # Add a second review
         dive.reviews.add(review2)
-        self.assertEqual(list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
-            [])
-        self.assertEqual(list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
-            ['Python Monthly', 'Python Weekly'])
+        self.assertEqual(
+            list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
+            ['Python Monthly', 'Python Weekly']
+        )
 
         # Remove the second author
         dive.reviews.remove(review1)
-        self.assertEqual(list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
-            [])
-        self.assertEqual(list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
-            ['Python Monthly'])
+        self.assertEqual(
+            list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
+            ['Python Monthly']
+        )
 
         # Clear all reviews
         dive.reviews.clear()
-        self.assertEqual(list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
-            [])
-        self.assertEqual(list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
-            [])
+        self.assertEqual(
+            list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
+            []
+        )
 
         # Create an author through the generic interface
         dive.reviews.create(source='Python Daily')
-        self.assertEqual(list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
-            [])
-        self.assertEqual(list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
-            ['Python Daily'])
+        self.assertEqual(
+            list(Review.objects.using('default').filter(object_id=dive.pk).values_list('source', flat=True)),
+            []
+        )
+        self.assertEqual(
+            list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
+            ['Python Daily']
+        )
 
     def test_generic_key_cross_database_protection(self):
         "Operations that involve sharing generic key objects across databases raise an error"
@@ -730,17 +862,25 @@ class QueryTestCase(TestCase):
         review3.content_object = dive
         self.assertEqual(review3._state.db, 'other')
         # ... but it isn't saved yet
-        self.assertEqual(list(Review.objects.using('default').filter(object_id=pro.pk).values_list('source', flat=True)),
-            ['Python Monthly'])
-        self.assertEqual(list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
-            ['Python Weekly'])
+        self.assertEqual(
+            list(Review.objects.using('default').filter(object_id=pro.pk).values_list('source', flat=True)),
+            ['Python Monthly']
+        )
+        self.assertEqual(
+            list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
+            ['Python Weekly']
+        )
 
         # When saved, John goes to 'other'
         review3.save()
-        self.assertEqual(list(Review.objects.using('default').filter(object_id=pro.pk).values_list('source', flat=True)),
-            ['Python Monthly'])
-        self.assertEqual(list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
-            ['Python Daily', 'Python Weekly'])
+        self.assertEqual(
+            list(Review.objects.using('default').filter(object_id=pro.pk).values_list('source', flat=True)),
+            ['Python Monthly']
+        )
+        self.assertEqual(
+            list(Review.objects.using('other').filter(object_id=dive.pk).values_list('source', flat=True)),
+            ['Python Daily', 'Python Weekly']
+        )
 
     def test_generic_key_deletion(self):
         "Cascaded deletions of Generic Key relations issue queries on the right database"
@@ -811,7 +951,8 @@ class QueryTestCase(TestCase):
         # When you call __str__ on the query object, it doesn't know about using
         # so it falls back to the default. If the subquery explicitly uses a
         # different database, an error should be raised.
-        self.assertRaises(ValueError, str, qs.query)
+        with self.assertRaises(ValueError):
+            str(qs.query)
 
         # Evaluating the query shouldn't work, either
         with self.assertRaises(ValueError):
@@ -842,7 +983,7 @@ class QueryTestCase(TestCase):
                                   extra_arg=True)
 
 
-class ConnectionRouterTestCase(TestCase):
+class ConnectionRouterTestCase(SimpleTestCase):
     @override_settings(DATABASE_ROUTERS=[
         'multiple_database.tests.TestRouter',
         'multiple_database.tests.WriteRouter'])
@@ -865,17 +1006,10 @@ class ConnectionRouterTestCase(TestCase):
                              ['TestRouter', 'WriteRouter'])
 
 
+# Make the 'other' database appear to be a replica of the 'default'
+@override_settings(DATABASE_ROUTERS=[TestRouter()])
 class RouterTestCase(TestCase):
     multi_db = True
-
-    def setUp(self):
-        # Make the 'other' database appear to be a replica of the 'default'
-        self.old_routers = router.routers
-        router.routers = [TestRouter()]
-
-    def tearDown(self):
-        # Restore the 'other' database as an independent database
-        router.routers = self.old_routers
 
     def test_db_selection(self):
         "Check that querysets obey the router for db suggestions"
@@ -890,30 +1024,28 @@ class RouterTestCase(TestCase):
     def test_migrate_selection(self):
         "Synchronization behavior is predictable"
 
-        self.assertTrue(router.allow_migrate('default', User))
-        self.assertTrue(router.allow_migrate('default', Book))
+        self.assertTrue(router.allow_migrate_model('default', User))
+        self.assertTrue(router.allow_migrate_model('default', Book))
 
-        self.assertTrue(router.allow_migrate('other', User))
-        self.assertTrue(router.allow_migrate('other', Book))
+        self.assertTrue(router.allow_migrate_model('other', User))
+        self.assertTrue(router.allow_migrate_model('other', Book))
 
-        # Add the auth router to the chain.
-        # TestRouter is a universal synchronizer, so it should have no effect.
-        router.routers = [TestRouter(), AuthRouter()]
+        with override_settings(DATABASE_ROUTERS=[TestRouter(), AuthRouter()]):
+            # Add the auth router to the chain. TestRouter is a universal
+            # synchronizer, so it should have no effect.
+            self.assertTrue(router.allow_migrate_model('default', User))
+            self.assertTrue(router.allow_migrate_model('default', Book))
 
-        self.assertTrue(router.allow_migrate('default', User))
-        self.assertTrue(router.allow_migrate('default', Book))
+            self.assertTrue(router.allow_migrate_model('other', User))
+            self.assertTrue(router.allow_migrate_model('other', Book))
 
-        self.assertTrue(router.allow_migrate('other', User))
-        self.assertTrue(router.allow_migrate('other', Book))
+        with override_settings(DATABASE_ROUTERS=[AuthRouter(), TestRouter()]):
+            # Now check what happens if the router order is reversed.
+            self.assertFalse(router.allow_migrate_model('default', User))
+            self.assertTrue(router.allow_migrate_model('default', Book))
 
-        # Now check what happens if the router order is the other way around
-        router.routers = [AuthRouter(), TestRouter()]
-
-        self.assertFalse(router.allow_migrate('default', User))
-        self.assertTrue(router.allow_migrate('default', Book))
-
-        self.assertTrue(router.allow_migrate('other', User))
-        self.assertFalse(router.allow_migrate('other', Book))
+            self.assertTrue(router.allow_migrate_model('other', User))
+            self.assertTrue(router.allow_migrate_model('other', Book))
 
     def test_partial_router(self):
         "A router can choose to implement a subset of methods"
@@ -930,28 +1062,27 @@ class RouterTestCase(TestCase):
 
         self.assertTrue(router.allow_relation(dive, dive))
 
-        self.assertTrue(router.allow_migrate('default', User))
-        self.assertTrue(router.allow_migrate('default', Book))
+        self.assertTrue(router.allow_migrate_model('default', User))
+        self.assertTrue(router.allow_migrate_model('default', Book))
 
-        router.routers = [WriteRouter(), AuthRouter(), TestRouter()]
+        with override_settings(DATABASE_ROUTERS=[WriteRouter(), AuthRouter(), TestRouter()]):
+            self.assertEqual(router.db_for_read(User), 'default')
+            self.assertEqual(router.db_for_read(Book), 'other')
 
-        self.assertEqual(router.db_for_read(User), 'default')
-        self.assertEqual(router.db_for_read(Book), 'other')
+            self.assertEqual(router.db_for_write(User), 'writer')
+            self.assertEqual(router.db_for_write(Book), 'writer')
 
-        self.assertEqual(router.db_for_write(User), 'writer')
-        self.assertEqual(router.db_for_write(Book), 'writer')
+            self.assertTrue(router.allow_relation(dive, dive))
 
-        self.assertTrue(router.allow_relation(dive, dive))
-
-        self.assertFalse(router.allow_migrate('default', User))
-        self.assertTrue(router.allow_migrate('default', Book))
+            self.assertFalse(router.allow_migrate_model('default', User))
+            self.assertTrue(router.allow_migrate_model('default', Book))
 
     def test_database_routing(self):
         marty = Person.objects.using('default').create(name="Marty Alchin")
         pro = Book.objects.using('default').create(title="Pro Django",
                                                    published=datetime.date(2008, 12, 16),
                                                    editor=marty)
-        pro.authors = [marty]
+        pro.authors.set([marty])
 
         # Create a book and author on the other database
         Book.objects.using('other').create(title="Dive into Python",
@@ -1003,6 +1134,17 @@ class RouterTestCase(TestCase):
         self.assertEqual(Book.objects.using('default').count(), 1)
         self.assertEqual(Book.objects.using('other').count(), 1)
 
+    def test_invalid_set_foreign_key_assignment(self):
+        marty = Person.objects.using('default').create(name="Marty Alchin")
+        dive = Book.objects.using('other').create(
+            title="Dive into Python",
+            published=datetime.date(2009, 5, 4),
+        )
+        # Set a foreign key set with an object from a different database
+        msg = "<Book: Dive into Python> instance isn't saved. Use bulk=False or save the object first."
+        with self.assertRaisesMessage(ValueError, msg):
+            marty.edited.set([dive])
+
     def test_foreign_key_cross_database_protection(self):
         "Foreign keys can cross databases if they two databases have a common source"
         # Create a book and author on the default database
@@ -1045,7 +1187,7 @@ class RouterTestCase(TestCase):
 
         # Set a foreign key set with an object from a different database
         try:
-            marty.edited = [pro, dive]
+            marty.edited.set([pro, dive], bulk=False)
         except ValueError:
             self.fail("Assignment across primary/replica databases with a common source should be ok")
 
@@ -1067,7 +1209,7 @@ class RouterTestCase(TestCase):
 
         # Add to a foreign key set with an object from a different database
         try:
-            marty.edited.add(dive)
+            marty.edited.add(dive, bulk=False)
         except ValueError:
             self.fail("Assignment across primary/replica databases with a common source should be ok")
 
@@ -1127,7 +1269,10 @@ class RouterTestCase(TestCase):
         self.assertEqual(cheesecake._state.db, 'default')
 
         # Same goes for get_or_create, regardless of whether getting or creating
-        cheesecake, created = mark.edited.get_or_create(title='Dive into Cheesecake', published=datetime.date(2010, 3, 15))
+        cheesecake, created = mark.edited.get_or_create(
+            title='Dive into Cheesecake',
+            published=datetime.date(2010, 3, 15),
+        )
         self.assertEqual(cheesecake._state.db, 'default')
 
         puddles, created = mark.edited.get_or_create(title='Dive into Puddles', published=datetime.date(2010, 3, 15))
@@ -1162,7 +1307,7 @@ class RouterTestCase(TestCase):
 
         # Set a m2m set with an object from a different database
         try:
-            marty.book_set = [pro, dive]
+            marty.book_set.set([pro, dive])
         except ValueError:
             self.fail("Assignment across primary/replica databases with a common source should be ok")
 
@@ -1200,7 +1345,7 @@ class RouterTestCase(TestCase):
 
         # Set a reverse m2m with an object from a different database
         try:
-            dive.authors = [mark, marty]
+            dive.authors.set([mark, marty])
         except ValueError:
             self.fail("Assignment across primary/replica databases with a common source should be ok")
 
@@ -1429,17 +1574,9 @@ class RouterTestCase(TestCase):
                          datetime.date(2009, 5, 4))
 
 
+@override_settings(DATABASE_ROUTERS=[AuthRouter()])
 class AuthTestCase(TestCase):
     multi_db = True
-
-    def setUp(self):
-        # Make the 'other' database appear to be a replica of the 'default'
-        self.old_routers = router.routers
-        router.routers = [AuthRouter()]
-
-    def tearDown(self):
-        # Restore the 'other' database as an independent database
-        router.routers = self.old_routers
 
     def test_auth_manager(self):
         "The methods on the auth manager obey database hints"
@@ -1455,7 +1592,8 @@ class AuthTestCase(TestCase):
         self.assertEqual(alice.username, 'alice')
         self.assertEqual(alice._state.db, 'other')
 
-        self.assertRaises(User.DoesNotExist, User.objects.using('default').get, username='alice')
+        with self.assertRaises(User.DoesNotExist):
+            User.objects.using('default').get(username='alice')
 
         # The second user only exists on the default database
         bob = User.objects.using('default').get(username='bob')
@@ -1463,7 +1601,8 @@ class AuthTestCase(TestCase):
         self.assertEqual(bob.username, 'bob')
         self.assertEqual(bob._state.db, 'default')
 
-        self.assertRaises(User.DoesNotExist, User.objects.using('other').get, username='bob')
+        with self.assertRaises(User.DoesNotExist):
+            User.objects.using('other').get(username='bob')
 
         # That is... there is one user on each database
         self.assertEqual(User.objects.using('default').count(), 1)
@@ -1492,27 +1631,18 @@ class AntiPetRouter(object):
     # A router that only expresses an opinion on migrate,
     # passing pets to the 'other' database
 
-    def allow_migrate(self, db, model):
-        "Make sure the auth app only appears on the 'other' db"
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
         if db == 'other':
-            return model._meta.object_name == 'Pet'
+            return model_name == 'pet'
         else:
-            return model._meta.object_name != 'Pet'
+            return model_name != 'pet'
 
 
 class FixtureTestCase(TestCase):
     multi_db = True
     fixtures = ['multidb-common', 'multidb']
 
-    def setUp(self):
-        # Install the anti-pet router
-        self.old_routers = router.routers
-        router.routers = [AntiPetRouter()]
-
-    def tearDown(self):
-        # Restore the 'other' database as an independent database
-        router.routers = self.old_routers
-
+    @override_settings(DATABASE_ROUTERS=[AntiPetRouter()])
     def test_fixture_loading(self):
         "Multi-db fixtures are loaded correctly"
         # Check that "Pro Django" exists on the default database, but not on other database
@@ -1522,11 +1652,8 @@ class FixtureTestCase(TestCase):
         except Book.DoesNotExist:
             self.fail('"Pro Django" should exist on default database')
 
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.using('other').get,
-            title="Pro Django"
-        )
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('other').get(title="Pro Django")
 
         # Check that "Dive into Python" exists on the default database, but not on other database
         try:
@@ -1534,16 +1661,10 @@ class FixtureTestCase(TestCase):
         except Book.DoesNotExist:
             self.fail('"Dive into Python" should exist on other database')
 
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.get,
-            title="Dive into Python"
-        )
-        self.assertRaises(
-            Book.DoesNotExist,
-            Book.objects.using('default').get,
-            title="Dive into Python"
-        )
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.get(title="Dive into Python")
+        with self.assertRaises(Book.DoesNotExist):
+            Book.objects.using('default').get(title="Dive into Python")
 
         # Check that "Definitive Guide" exists on the both databases
         try:
@@ -1553,8 +1674,12 @@ class FixtureTestCase(TestCase):
         except Book.DoesNotExist:
             self.fail('"The Definitive Guide to Django" should exist on both databases')
 
+    @override_settings(DATABASE_ROUTERS=[AntiPetRouter()])
     def test_pseudo_empty_fixtures(self):
-        "A fixture can contain entries, but lead to nothing in the database; this shouldn't raise an error (ref #14068)"
+        """
+        A fixture can contain entries, but lead to nothing in the database;
+        this shouldn't raise an error (#14068).
+        """
         new_io = StringIO()
         management.call_command('loaddata', 'pets', stdout=new_io, stderr=new_io)
         command_output = new_io.getvalue().strip()
@@ -1591,19 +1716,8 @@ class WriteToOtherRouter(object):
 class SignalTests(TestCase):
     multi_db = True
 
-    def setUp(self):
-        self.old_routers = router.routers
-
-    def tearDown(self):
-        router.routers = self.old_routers
-
-    def _write_to_other(self):
-        "Sends all writes to 'other'."
-        router.routers = [WriteToOtherRouter()]
-
-    def _write_to_default(self):
-        "Sends all writes to the default DB"
-        router.routers = self.old_routers
+    def override_router(self):
+        return override_settings(DATABASE_ROUTERS=[WriteToOtherRouter()])
 
     def test_database_arg_save_and_delete(self):
         """
@@ -1666,33 +1780,29 @@ class SignalTests(TestCase):
         # Test addition
         b.authors.add(p)
         self.assertEqual(receiver._database, DEFAULT_DB_ALIAS)
-        self._write_to_other()
-        b.authors.add(p)
-        self._write_to_default()
+        with self.override_router():
+            b.authors.add(p)
         self.assertEqual(receiver._database, "other")
 
         # Test removal
         b.authors.remove(p)
         self.assertEqual(receiver._database, DEFAULT_DB_ALIAS)
-        self._write_to_other()
-        b.authors.remove(p)
-        self._write_to_default()
+        with self.override_router():
+            b.authors.remove(p)
         self.assertEqual(receiver._database, "other")
 
         # Test addition in reverse
         p.book_set.add(b)
         self.assertEqual(receiver._database, DEFAULT_DB_ALIAS)
-        self._write_to_other()
-        p.book_set.add(b)
-        self._write_to_default()
+        with self.override_router():
+            p.book_set.add(b)
         self.assertEqual(receiver._database, "other")
 
         # Test clearing
         b.authors.clear()
         self.assertEqual(receiver._database, DEFAULT_DB_ALIAS)
-        self._write_to_other()
-        b.authors.clear()
-        self._write_to_default()
+        with self.override_router():
+            b.authors.clear()
         self.assertEqual(receiver._database, "other")
 
 
@@ -1708,47 +1818,45 @@ class AttributeErrorRouter(object):
 class RouterAttributeErrorTestCase(TestCase):
     multi_db = True
 
-    def setUp(self):
-        self.old_routers = router.routers
-        router.routers = [AttributeErrorRouter()]
-
-    def tearDown(self):
-        router.routers = self.old_routers
+    def override_router(self):
+        return override_settings(DATABASE_ROUTERS=[AttributeErrorRouter()])
 
     def test_attribute_error_read(self):
         "Check that the AttributeError from AttributeErrorRouter bubbles up"
-        router.routers = []  # Reset routers so we can save a Book instance
         b = Book.objects.create(title="Pro Django",
                                 published=datetime.date(2008, 12, 16))
-        router.routers = [AttributeErrorRouter()]  # Install our router
-        self.assertRaises(AttributeError, Book.objects.get, pk=b.pk)
+        with self.override_router():
+            with self.assertRaises(AttributeError):
+                Book.objects.get(pk=b.pk)
 
     def test_attribute_error_save(self):
         "Check that the AttributeError from AttributeErrorRouter bubbles up"
         dive = Book()
         dive.title = "Dive into Python"
         dive.published = datetime.date(2009, 5, 4)
-        self.assertRaises(AttributeError, dive.save)
+        with self.override_router():
+            with self.assertRaises(AttributeError):
+                dive.save()
 
     def test_attribute_error_delete(self):
         "Check that the AttributeError from AttributeErrorRouter bubbles up"
-        router.routers = []  # Reset routers so we can save our Book, Person instances
         b = Book.objects.create(title="Pro Django",
                                 published=datetime.date(2008, 12, 16))
         p = Person.objects.create(name="Marty Alchin")
-        b.authors = [p]
+        b.authors.set([p])
         b.editor = p
-        router.routers = [AttributeErrorRouter()]  # Install our router
-        self.assertRaises(AttributeError, b.delete)
+        with self.override_router():
+            with self.assertRaises(AttributeError):
+                b.delete()
 
     def test_attribute_error_m2m(self):
         "Check that the AttributeError from AttributeErrorRouter bubbles up"
-        router.routers = []  # Reset routers so we can save our Book, Person instances
         b = Book.objects.create(title="Pro Django",
                                 published=datetime.date(2008, 12, 16))
         p = Person.objects.create(name="Marty Alchin")
-        router.routers = [AttributeErrorRouter()]  # Install our router
-        self.assertRaises(AttributeError, setattr, b, 'authors', [p])
+        with self.override_router():
+            with self.assertRaises(AttributeError):
+                b.authors.set([p])
 
 
 class ModelMetaRouter(object):
@@ -1758,15 +1866,9 @@ class ModelMetaRouter(object):
             raise ValueError
 
 
+@override_settings(DATABASE_ROUTERS=[ModelMetaRouter()])
 class RouterModelArgumentTestCase(TestCase):
     multi_db = True
-
-    def setUp(self):
-        self.old_routers = router.routers
-        router.routers = [ModelMetaRouter()]
-
-    def tearDown(self):
-        router.routers = self.old_routers
 
     def test_m2m_collection(self):
         b = Book.objects.create(title="Pro Django",
@@ -1780,7 +1882,7 @@ class RouterModelArgumentTestCase(TestCase):
         # test clear
         b.authors.clear()
         # test setattr
-        b.authors = [p]
+        b.authors.set([p])
         # test M2M collection
         b.delete()
 
@@ -1792,7 +1894,7 @@ class RouterModelArgumentTestCase(TestCase):
 
 
 class SyncOnlyDefaultDatabaseRouter(object):
-    def allow_migrate(self, db, model):
+    def allow_migrate(self, db, app_label, **hints):
         return db == DEFAULT_DB_ALIAS
 
 
@@ -1813,8 +1915,7 @@ class MigrateTestCase(TestCase):
         self.assertGreater(count, 0)
 
         cts.delete()
-        management.call_command('migrate', verbosity=0, interactive=False,
-            load_initial_data=False, database='other')
+        management.call_command('migrate', verbosity=0, interactive=False, database='other')
         self.assertEqual(cts.count(), count)
 
     def test_migrate_to_other_database_with_router(self):
@@ -1822,13 +1923,8 @@ class MigrateTestCase(TestCase):
         cts = ContentType.objects.using('other').filter(app_label='multiple_database')
 
         cts.delete()
-        try:
-            old_routers = router.routers
-            router.routers = [SyncOnlyDefaultDatabaseRouter()]
-            management.call_command('migrate', verbosity=0, interactive=False,
-                load_initial_data=False, database='other')
-        finally:
-            router.routers = old_routers
+        with override_settings(DATABASE_ROUTERS=[SyncOnlyDefaultDatabaseRouter()]):
+            management.call_command('migrate', verbosity=0, interactive=False, database='other')
 
         self.assertEqual(cts.count(), 0)
 
@@ -1844,27 +1940,20 @@ class RouterUsed(Exception):
 
 class RouteForWriteTestCase(TestCase):
     multi_db = True
-    RAISE_MSG = 'Db for write called'
 
     class WriteCheckRouter(object):
         def db_for_write(self, model, **hints):
             raise RouterUsed(mode=RouterUsed.WRITE, model=model, hints=hints)
 
-    def setUp(self):
-        self._old_rtrs = router.routers
-
-    def tearDown(self):
-        router.routers = self._old_rtrs
-
-    def enable_router(self):
-        router.routers = [RouteForWriteTestCase.WriteCheckRouter()]
+    def override_router(self):
+        return override_settings(DATABASE_ROUTERS=[RouteForWriteTestCase.WriteCheckRouter()])
 
     def test_fk_delete(self):
         owner = Person.objects.create(name='Someone')
         pet = Pet.objects.create(name='fido', owner=owner)
-        self.enable_router()
         try:
-            pet.owner.delete()
+            with self.override_router():
+                pet.owner.delete()
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1874,9 +1963,9 @@ class RouteForWriteTestCase(TestCase):
     def test_reverse_fk_delete(self):
         owner = Person.objects.create(name='Someone')
         to_del_qs = owner.pet_set.all()
-        self.enable_router()
         try:
-            to_del_qs.delete()
+            with self.override_router():
+                to_del_qs.delete()
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1885,9 +1974,9 @@ class RouteForWriteTestCase(TestCase):
 
     def test_reverse_fk_get_or_create(self):
         owner = Person.objects.create(name='Someone')
-        self.enable_router()
         try:
-            owner.pet_set.get_or_create(name='fido')
+            with self.override_router():
+                owner.pet_set.get_or_create(name='fido')
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1897,9 +1986,9 @@ class RouteForWriteTestCase(TestCase):
     def test_reverse_fk_update(self):
         owner = Person.objects.create(name='Someone')
         Pet.objects.create(name='fido', owner=owner)
-        self.enable_router()
         try:
-            owner.pet_set.update(name='max')
+            with self.override_router():
+                owner.pet_set.update(name='max')
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1910,9 +1999,9 @@ class RouteForWriteTestCase(TestCase):
         auth = Person.objects.create(name='Someone')
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
-        self.enable_router()
         try:
-            book.authors.add(auth)
+            with self.override_router():
+                book.authors.add(auth)
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1924,9 +2013,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
         try:
-            book.authors.clear()
+            with self.override_router():
+                book.authors.clear()
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1938,9 +2027,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
         try:
-            book.authors.all().delete()
+            with self.override_router():
+                book.authors.all().delete()
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1951,9 +2040,9 @@ class RouteForWriteTestCase(TestCase):
         Person.objects.create(name='Someone')
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
-        self.enable_router()
         try:
-            book.authors.get_or_create(name='Someone else')
+            with self.override_router():
+                book.authors.get_or_create(name='Someone else')
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1965,10 +2054,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
-        self.assertRaisesMessage(AttributeError, self.RAISE_MSG, )
         try:
-            book.authors.remove(auth)
+            with self.override_router():
+                book.authors.remove(auth)
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1980,9 +2068,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
         try:
-            book.authors.all().update(name='Different')
+            with self.override_router():
+                book.authors.all().update(name='Different')
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -1993,9 +2081,9 @@ class RouteForWriteTestCase(TestCase):
         auth = Person.objects.create(name='Someone')
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
-        self.enable_router()
         try:
-            auth.book_set.add(book)
+            with self.override_router():
+                auth.book_set.add(book)
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -2007,9 +2095,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
         try:
-            auth.book_set.clear()
+            with self.override_router():
+                auth.book_set.clear()
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -2021,9 +2109,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
         try:
-            auth.book_set.all().delete()
+            with self.override_router():
+                auth.book_set.all().delete()
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -2034,9 +2122,9 @@ class RouteForWriteTestCase(TestCase):
         auth = Person.objects.create(name='Someone')
         Book.objects.create(title="Pro Django",
                             published=datetime.date(2008, 12, 16))
-        self.enable_router()
         try:
-            auth.book_set.get_or_create(title="New Book", published=datetime.datetime.now())
+            with self.override_router():
+                auth.book_set.get_or_create(title="New Book", published=datetime.datetime.now())
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -2048,9 +2136,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
         try:
-            auth.book_set.remove(book)
+            with self.override_router():
+                auth.book_set.remove(book)
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)
@@ -2062,9 +2150,9 @@ class RouteForWriteTestCase(TestCase):
         book = Book.objects.create(title="Pro Django",
                                    published=datetime.date(2008, 12, 16))
         book.authors.add(auth)
-        self.enable_router()
         try:
-            auth.book_set.all().update(title='Different')
+            with self.override_router():
+                auth.book_set.all().update(title='Different')
             self.fail('db_for_write() not invoked on router')
         except RouterUsed as e:
             self.assertEqual(e.mode, RouterUsed.WRITE)

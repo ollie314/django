@@ -2,7 +2,7 @@ from django.db.models.sql import compiler
 
 
 class SQLCompiler(compiler.SQLCompiler):
-    def as_sql(self, with_limits=True, with_col_aliases=False):
+    def as_sql(self, with_limits=True, with_col_aliases=False, subquery=False):
         """
         Creates the SQL for this query. Returns the SQL string and list
         of parameters.  This is overridden from the original Query class
@@ -12,20 +12,22 @@ class SQLCompiler(compiler.SQLCompiler):
         If 'with_limits' is False, any limit/offset information is not
         included in the query.
         """
-        if with_limits and self.query.low_mark == self.query.high_mark:
-            return '', ()
-
         # The `do_offset` flag indicates whether we need to construct
         # the SQL needed to use limit/offset with Oracle.
         do_offset = with_limits and (self.query.high_mark is not None
                                      or self.query.low_mark)
         if not do_offset:
-            sql, params = super(SQLCompiler, self).as_sql(with_limits=False,
-                    with_col_aliases=with_col_aliases)
+            sql, params = super(SQLCompiler, self).as_sql(
+                with_limits=False,
+                with_col_aliases=with_col_aliases,
+                subquery=subquery,
+            )
         else:
-            sql, params = super(SQLCompiler, self).as_sql(with_limits=False,
-                                                    with_col_aliases=True)
-
+            sql, params = super(SQLCompiler, self).as_sql(
+                with_limits=False,
+                with_col_aliases=True,
+                subquery=subquery,
+            )
             # Wrap the base query in an outer SELECT * with boundaries on
             # the "_RN" column.  This is the canonical way to emulate LIMIT
             # and OFFSET on Oracle.
@@ -53,12 +55,4 @@ class SQLUpdateCompiler(compiler.SQLUpdateCompiler, SQLCompiler):
 
 
 class SQLAggregateCompiler(compiler.SQLAggregateCompiler, SQLCompiler):
-    pass
-
-
-class SQLDateCompiler(compiler.SQLDateCompiler, SQLCompiler):
-    pass
-
-
-class SQLDateTimeCompiler(compiler.SQLDateTimeCompiler, SQLCompiler):
     pass

@@ -5,32 +5,45 @@ from __future__ import unicode_literals
 import json
 import os
 import re
+import unittest
 import warnings
 
-from django.core import serializers
+import django
+from django.core import management, serializers
 from django.core.exceptions import ImproperlyConfigured
-from django.core.serializers.base import DeserializationError
-from django.core import management
 from django.core.management.base import CommandError
-from django.db import transaction, IntegrityError
+from django.core.serializers.base import DeserializationError
+from django.db import IntegrityError, transaction
 from django.db.models import signals
-from django.test import (TestCase, TransactionTestCase, skipIfDBFeature,
-    skipUnlessDBFeature)
-from django.test import override_settings
-from django.utils._os import upath
+from django.test import (
+    TestCase, TransactionTestCase, override_settings, skipIfDBFeature,
+    skipUnlessDBFeature,
+)
 from django.utils import six
+from django.utils._os import upath
 from django.utils.six import PY3, StringIO
 
-from .models import (Animal, Stuff, Absolute, Parent, Child, Article, Widget,
-    Store, Person, Book, NKChild, RefToNKChild, Circle1, Circle2, Circle3,
-    ExternalDependency, Thingy,
-    M2MSimpleA, M2MSimpleB, M2MSimpleCircularA, M2MSimpleCircularB,
-    M2MComplexA, M2MComplexB, M2MThroughAB, M2MComplexCircular1A,
-    M2MComplexCircular1B, M2MComplexCircular1C, M2MCircular1ThroughAB,
-    M2MCircular1ThroughBC, M2MCircular1ThroughCA, M2MComplexCircular2A,
-    M2MComplexCircular2B, M2MCircular2ThroughAB)
+from .models import (
+    Absolute, Animal, Article, Book, Child, Circle1, Circle2, Circle3,
+    ExternalDependency, M2MCircular1ThroughAB, M2MCircular1ThroughBC,
+    M2MCircular1ThroughCA, M2MCircular2ThroughAB, M2MComplexA, M2MComplexB,
+    M2MComplexCircular1A, M2MComplexCircular1B, M2MComplexCircular1C,
+    M2MComplexCircular2A, M2MComplexCircular2B, M2MSimpleA, M2MSimpleB,
+    M2MSimpleCircularA, M2MSimpleCircularB, M2MThroughAB, NKChild, Parent,
+    Person, RefToNKChild, Store, Stuff, Thingy, Widget,
+)
 
 _cur_dir = os.path.dirname(os.path.abspath(upath(__file__)))
+
+
+def is_ascii(s):
+    return all(ord(c) < 128 for c in s)
+
+
+skipIfNonASCIIPath = unittest.skipIf(
+    not is_ascii(django.__file__) and six.PY2,
+    'Python 2 crashes when checking non-ASCII exception messages.'
+)
 
 
 class TestFixtures(TestCase):
@@ -188,15 +201,15 @@ class TestFixtures(TestCase):
         Test for ticket #4371 -- Loading data of an unknown format should fail
         Validate that error conditions are caught correctly
         """
-        with six.assertRaisesRegex(self, management.CommandError,
-                "Problem installing fixture 'bad_fixture1': "
-                "unkn is not a known serialization format."):
+        msg = "Problem installing fixture 'bad_fixture1': unkn is not a known serialization format."
+        with self.assertRaisesMessage(management.CommandError, msg):
             management.call_command(
                 'loaddata',
                 'bad_fixture1.unkn',
                 verbosity=0,
             )
 
+    @skipIfNonASCIIPath
     @override_settings(SERIALIZATION_MODULES={'unkn': 'unexistent.path'})
     def test_unimportable_serializer(self):
         """
@@ -225,7 +238,10 @@ class TestFixtures(TestCase):
             )
             warning = warning_list.pop()
             self.assertEqual(warning.category, RuntimeWarning)
-            self.assertEqual(str(warning.message), "No fixture data found for 'bad_fixture2'. (File format may be invalid.)")
+            self.assertEqual(
+                str(warning.message),
+                "No fixture data found for 'bad_fixture2'. (File format may be invalid.)"
+            )
 
     def test_invalid_data_no_ext(self):
         """
@@ -242,7 +258,10 @@ class TestFixtures(TestCase):
             )
             warning = warning_list.pop()
             self.assertEqual(warning.category, RuntimeWarning)
-            self.assertEqual(str(warning.message), "No fixture data found for 'bad_fixture2'. (File format may be invalid.)")
+            self.assertEqual(
+                str(warning.message),
+                "No fixture data found for 'bad_fixture2'. (File format may be invalid.)"
+            )
 
     def test_empty(self):
         """
@@ -258,7 +277,8 @@ class TestFixtures(TestCase):
             )
             warning = warning_list.pop()
             self.assertEqual(warning.category, RuntimeWarning)
-            self.assertEqual(str(warning.message), "No fixture data found for 'empty'. (File format may be invalid.)")
+            self.assertEqual(str(warning.message),
+            "No fixture data found for 'empty'. (File format may be invalid.)")
 
     def test_error_message(self):
         """
@@ -275,7 +295,10 @@ class TestFixtures(TestCase):
             )
             warning = warning_list.pop()
             self.assertEqual(warning.category, RuntimeWarning)
-            self.assertEqual(str(warning.message), "No fixture data found for 'bad_fixture2'. (File format may be invalid.)")
+            self.assertEqual(
+                str(warning.message),
+                "No fixture data found for 'bad_fixture2'. (File format may be invalid.)"
+            )
 
     def test_pg_sequence_resetting_checks(self):
         """
@@ -380,9 +403,18 @@ class TestFixtures(TestCase):
         data = re.sub('0{6,}[0-9]', '', data)
 
         animals_data = sorted([
-            {"pk": 1, "model": "fixtures_regress.animal", "fields": {"count": 3, "weight": 1.2, "name": "Lion", "latin_name": "Panthera leo"}},
-            {"pk": 10, "model": "fixtures_regress.animal", "fields": {"count": 42, "weight": 1.2, "name": "Emu", "latin_name": "Dromaius novaehollandiae"}},
-            {"pk": animal.pk, "model": "fixtures_regress.animal", "fields": {"count": 2, "weight": 2.2, "name": "Platypus", "latin_name": "Ornithorhynchus anatinus"}},
+            {
+                "pk": 1, "model": "fixtures_regress.animal",
+                "fields": {"count": 3, "weight": 1.2, "name": "Lion", "latin_name": "Panthera leo"}
+            },
+            {
+                "pk": 10, "model": "fixtures_regress.animal",
+                "fields": {"count": 42, "weight": 1.2, "name": "Emu", "latin_name": "Dromaius novaehollandiae"}
+            },
+            {
+                "pk": animal.pk, "model": "fixtures_regress.animal",
+                "fields": {"count": 2, "weight": 2.2, "name": "Platypus", "latin_name": "Ornithorhynchus anatinus"}
+            },
         ], key=lambda x: x["pk"])
 
         data = sorted(json.loads(data), key=lambda x: x["pk"])
@@ -427,8 +459,7 @@ class TestFixtures(TestCase):
         """
         Regression for #3615 - Ensure data with nonexistent child key references raises error
         """
-        with six.assertRaisesRegex(self, IntegrityError,
-                "Problem installing fixture"):
+        with self.assertRaisesMessage(IntegrityError, "Problem installing fixture"):
             management.call_command(
                 'loaddata',
                 'forward_ref_bad_data.json',
@@ -456,9 +487,8 @@ class TestFixtures(TestCase):
         """
         Regression for #7043 - Error is quickly reported when no fixtures is provided in the command line.
         """
-        with six.assertRaisesRegex(self, management.CommandError,
-                "No database fixture specified. Please provide the path of "
-                "at least one fixture in the command line."):
+        msg = "No database fixture specified. Please provide the path of at least one fixture in the command line."
+        with self.assertRaisesMessage(management.CommandError, msg):
             management.call_command(
                 'loaddata',
                 verbosity=0,
@@ -487,6 +517,16 @@ class TestFixtures(TestCase):
             verbosity=0,
         )
 
+    def test_loaddata_with_m2m_to_self(self):
+        """
+        Regression test for ticket #17946.
+        """
+        management.call_command(
+            'loaddata',
+            'm2mtoself.json',
+            verbosity=0,
+        )
+
     @override_settings(FIXTURE_DIRS=[os.path.join(_cur_dir, 'fixtures_1'),
                                      os.path.join(_cur_dir, 'fixtures_1')])
     def test_fixture_dirs_with_duplicates(self):
@@ -494,31 +534,23 @@ class TestFixtures(TestCase):
         settings.FIXTURE_DIRS cannot contain duplicates in order to avoid
         repeated fixture loading.
         """
-        self.assertRaisesMessage(
-            ImproperlyConfigured,
-            "settings.FIXTURE_DIRS contains duplicates.",
-            management.call_command,
-            'loaddata',
-            'absolute.json',
-            verbosity=0,
-        )
+        with self.assertRaisesMessage(ImproperlyConfigured, "settings.FIXTURE_DIRS contains duplicates."):
+            management.call_command('loaddata', 'absolute.json', verbosity=0)
 
+    @skipIfNonASCIIPath
     @override_settings(FIXTURE_DIRS=[os.path.join(_cur_dir, 'fixtures')])
     def test_fixture_dirs_with_default_fixture_path(self):
         """
         settings.FIXTURE_DIRS cannot contain a default fixtures directory
         for application (app/fixtures) in order to avoid repeated fixture loading.
         """
-        self.assertRaisesMessage(
-            ImproperlyConfigured,
+        msg = (
             "'%s' is a default fixture directory for the '%s' app "
             "and cannot be listed in settings.FIXTURE_DIRS."
-            % (os.path.join(_cur_dir, 'fixtures'), 'fixtures_regress'),
-            management.call_command,
-            'loaddata',
-            'absolute.json',
-            verbosity=0,
+            % (os.path.join(_cur_dir, 'fixtures'), 'fixtures_regress')
         )
+        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+            management.call_command('loaddata', 'absolute.json', verbosity=0)
 
     @override_settings(FIXTURE_DIRS=[os.path.join(_cur_dir, 'fixtures_1'),
                                      os.path.join(_cur_dir, 'fixtures_2')])
@@ -611,7 +643,13 @@ class NaturalKeyFixtureTests(TestCase):
         )
         self.assertJSONEqual(
             out.getvalue(),
-            """[{"fields": {"main": null, "name": "Amazon"}, "model": "fixtures_regress.store"}, {"fields": {"main": null, "name": "Borders"}, "model": "fixtures_regress.store"}, {"fields": {"name": "Neal Stephenson"}, "model": "fixtures_regress.person"}, {"pk": 1, "model": "fixtures_regress.book", "fields": {"stores": [["Amazon"], ["Borders"]], "name": "Cryptonomicon", "author": ["Neal Stephenson"]}}]"""
+            """
+            [{"fields": {"main": null, "name": "Amazon"}, "model": "fixtures_regress.store"},
+            {"fields": {"main": null, "name": "Borders"}, "model": "fixtures_regress.store"},
+            {"fields": {"name": "Neal Stephenson"}, "model": "fixtures_regress.person"},
+            {"pk": 1, "model": "fixtures_regress.book", "fields": {"stores": [["Amazon"], ["Borders"]],
+            "name": "Cryptonomicon", "author": ["Neal Stephenson"]}}]
+            """
         )
 
     def test_dependency_sorting(self):
@@ -684,36 +722,37 @@ class NaturalKeyFixtureTests(TestCase):
         )
 
     def test_dependency_sorting_tight_circular(self):
-        self.assertRaisesMessage(
+        with self.assertRaisesMessage(
             RuntimeError,
-            """Can't resolve dependencies for fixtures_regress.Circle1, fixtures_regress.Circle2 in serialized app list.""",
-            serializers.sort_dependencies,
-            [('fixtures_regress', [Person, Circle2, Circle1, Store, Book])],
-        )
+            "Can't resolve dependencies for fixtures_regress.Circle1, "
+            "fixtures_regress.Circle2 in serialized app list."
+        ):
+            serializers.sort_dependencies([('fixtures_regress', [Person, Circle2, Circle1, Store, Book])])
 
     def test_dependency_sorting_tight_circular_2(self):
-        self.assertRaisesMessage(
+        with self.assertRaisesMessage(
             RuntimeError,
-            """Can't resolve dependencies for fixtures_regress.Circle1, fixtures_regress.Circle2 in serialized app list.""",
-            serializers.sort_dependencies,
-            [('fixtures_regress', [Circle1, Book, Circle2])],
-        )
+            "Can't resolve dependencies for fixtures_regress.Circle1, "
+            "fixtures_regress.Circle2 in serialized app list."
+        ):
+            serializers.sort_dependencies([('fixtures_regress', [Circle1, Book, Circle2])])
 
     def test_dependency_self_referential(self):
-        self.assertRaisesMessage(
+        with self.assertRaisesMessage(
             RuntimeError,
-            """Can't resolve dependencies for fixtures_regress.Circle3 in serialized app list.""",
-            serializers.sort_dependencies,
-            [('fixtures_regress', [Book, Circle3])],
-        )
+            "Can't resolve dependencies for fixtures_regress.Circle3 in "
+            "serialized app list."
+        ):
+            serializers.sort_dependencies([('fixtures_regress', [Book, Circle3])])
 
     def test_dependency_sorting_long(self):
-        self.assertRaisesMessage(
+        with self.assertRaisesMessage(
             RuntimeError,
-            """Can't resolve dependencies for fixtures_regress.Circle1, fixtures_regress.Circle2, fixtures_regress.Circle3 in serialized app list.""",
-            serializers.sort_dependencies,
-            [('fixtures_regress', [Person, Circle2, Circle1, Circle3, Store, Book])],
-        )
+            "Can't resolve dependencies for fixtures_regress.Circle1, "
+            "fixtures_regress.Circle2, fixtures_regress.Circle3 in serialized "
+            "app list."
+        ):
+            serializers.sort_dependencies([('fixtures_regress', [Person, Circle2, Circle1, Circle3, Store, Book])])
 
     def test_dependency_sorting_normal(self):
         sorted_deps = serializers.sort_dependencies(
@@ -745,9 +784,12 @@ class NaturalKeyFixtureTests(TestCase):
             verbosity=0,
         )
         books = Book.objects.all()
-        self.assertEqual(
-            books.__repr__(),
-            """[<Book: Cryptonomicon by Neal Stephenson (available at Amazon, Borders)>, <Book: Ender's Game by Orson Scott Card (available at Collins Bookstore)>, <Book: Permutation City by Greg Egan (available at Angus and Robertson)>]"""
+        self.assertQuerysetEqual(
+            books, [
+                "<Book: Cryptonomicon by Neal Stephenson (available at Amazon, Borders)>",
+                "<Book: Ender's Game by Orson Scott Card (available at Collins Bookstore)>",
+                "<Book: Permutation City by Greg Egan (available at Angus and Robertson)>",
+            ]
         )
 
 
@@ -772,13 +814,12 @@ class M2MNaturalKeyFixtureTests(TestCase):
         Resolving circular M2M relations without explicit through models should
         fail loudly
         """
-        self.assertRaisesMessage(
+        with self.assertRaisesMessage(
             RuntimeError,
             "Can't resolve dependencies for fixtures_regress.M2MSimpleCircularA, "
-            "fixtures_regress.M2MSimpleCircularB in serialized app list.",
-            serializers.sort_dependencies,
-            [('fixtures_regress', [M2MSimpleCircularA, M2MSimpleCircularB])]
-        )
+            "fixtures_regress.M2MSimpleCircularB in serialized app list."
+        ):
+            serializers.sort_dependencies([('fixtures_regress', [M2MSimpleCircularA, M2MSimpleCircularB])])
 
     def test_dependency_sorting_m2m_complex(self):
         """

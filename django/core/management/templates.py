@@ -8,17 +8,15 @@ import shutil
 import stat
 import sys
 import tempfile
-
 from os import path
 
 import django
-from django.template import Template, Context
-from django.utils import archive
-from django.utils.six.moves.urllib.request import urlretrieve
-from django.utils._os import rmtree_errorhandler
 from django.core.management.base import BaseCommand, CommandError
 from django.core.management.utils import handle_extensions
-
+from django.template import Context, Engine
+from django.utils import archive, six
+from django.utils.six.moves.urllib.request import urlretrieve
+from django.utils.version import get_docs_version
 
 _drive_re = re.compile('^([a-z]):', re.I)
 _url_drive_re = re.compile('^([a-z])[:|]', re.I)
@@ -44,6 +42,11 @@ class TemplateCommand(BaseCommand):
     # Can't perform any active locale changes during this command, because
     # setting might not be available at all.
     leave_locale_alone = True
+    # Rewrite the following suffixes when determining the target filename.
+    rewrite_template_suffixes = (
+        # Allow shipping invalid .py files without byte-compilation.
+        ('.py-tpl', '.py'),
+    )
 
     def add_arguments(self, parser):
         parser.add_argument('name', help='Name of the application or project.')
@@ -100,15 +103,16 @@ class TemplateCommand(BaseCommand):
         base_name = '%s_name' % app_or_project
         base_subdir = '%s_template' % app_or_project
         base_directory = '%s_directory' % app_or_project
-        if django.VERSION[-2] != 'final':
-            docs_version = 'dev'
-        else:
-            docs_version = '%d.%d' % django.VERSION[:2]
+        camel_case_name = 'camel_case_%s_name' % app_or_project
+        camel_case_value = ''.join(x for x in name.title() if x != '_')
 
         context = Context(dict(options, **{
             base_name: name,
             base_directory: top_dir,
-            'docs_version': docs_version,
+            camel_case_name: camel_case_value,
+            'docs_version': get_docs_version(),
+            'django_version': django.__version__,
+            'unicode_literals': '' if six.PY3 else 'from __future__ import unicode_literals\n\n',
         }), autoescape=False)
 
         # Setup a stub settings environment for template rendering
@@ -140,6 +144,11 @@ class TemplateCommand(BaseCommand):
                 old_path = path.join(root, filename)
                 new_path = path.join(top_dir, relative_dir,
                                      filename.replace(base_name, name))
+                for old_suffix, new_suffix in self.rewrite_template_suffixes:
+                    if new_path.endswith(old_suffix):
+                        new_path = new_path[:-len(old_suffix)] + new_suffix
+                        break  # Only rewrite once
+
                 if path.exists(new_path):
                     raise CommandError("%s already exists, overlaying a "
                                        "project or app into an existing "
@@ -150,9 +159,9 @@ class TemplateCommand(BaseCommand):
                 # accidentally render Django templates files
                 with open(old_path, 'rb') as template_file:
                     content = template_file.read()
-                if filename.endswith(extensions) or filename in extra_files:
+                if new_path.endswith(extensions) or filename in extra_files:
                     content = content.decode('utf-8')
-                    template = Template(content)
+                    template = Engine().from_string(content)
                     content = template.render(context)
                     content = content.encode('utf-8')
                 with open(new_path, 'wb') as new_file:
@@ -176,8 +185,7 @@ class TemplateCommand(BaseCommand):
                 if path.isfile(path_to_remove):
                     os.remove(path_to_remove)
                 else:
-                    shutil.rmtree(path_to_remove,
-                                  onerror=rmtree_errorhandler)
+                    shutil.rmtree(path_to_remove)
 
     def handle_template(self, template, subdir):
         """
@@ -210,14 +218,21 @@ class TemplateCommand(BaseCommand):
             raise CommandError("you must provide %s %s name" % (
                 "an" if app_or_project == "app" else "a", app_or_project))
         # If it's not a valid directory name.
-        if not re.search(r'^[_a-zA-Z]\w*$', name):
-            # Provide a smart error message, depending on the error.
-            if not re.search(r'^[_a-zA-Z]', name):
-                message = 'make sure the name begins with a letter or underscore'
-            else:
-                message = 'use only numbers, letters and underscores'
-            raise CommandError("%r is not a valid %s name. Please %s." %
-                               (name, app_or_project, message))
+        if six.PY2:
+            if not re.search(r'^[_a-zA-Z]\w*$', name):
+                # Provide a smart error message, depending on the error.
+                if not re.search(r'^[_a-zA-Z]', name):
+                    message = 'make sure the name begins with a letter or underscore'
+                else:
+                    message = 'use only numbers, letters and underscores'
+                raise CommandError("%r is not a valid %s name. Please %s." %
+                                   (name, app_or_project, message))
+        else:
+            if not name.isidentifier():
+                raise CommandError(
+                    "%r is not a valid %s name. Please make sure the name is "
+                    "a valid identifier." % (name, app_or_project)
+                )
 
     def download(self, url):
         """

@@ -1,5 +1,5 @@
 from django.core import checks
-from django.db.backends import BaseDatabaseValidation
+from django.db.backends.base.validation import BaseDatabaseValidation
 
 
 class DatabaseValidation(BaseDatabaseValidation):
@@ -14,7 +14,7 @@ class DatabaseValidation(BaseDatabaseValidation):
         errors = super(DatabaseValidation, self).check_field(field, **kwargs)
 
         # Ignore any related fields.
-        if getattr(field, 'rel', None) is None:
+        if getattr(field, 'remote_field', None) is None:
             field_type = field.db_type(connection)
 
             # Ignore any non-concrete fields
@@ -26,8 +26,7 @@ class DatabaseValidation(BaseDatabaseValidation):
                     and (field.max_length is None or int(field.max_length) > 255)):
                 errors.append(
                     checks.Error(
-                        ('MySQL does not allow unique CharFields to have a max_length > 255.'),
-                        hint=None,
+                        'MySQL does not allow unique CharFields to have a max_length > 255.',
                         obj=field,
                         id='mysql.E001',
                     )

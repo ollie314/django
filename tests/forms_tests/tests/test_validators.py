@@ -40,13 +40,14 @@ class UserForm(forms.Form):
 
 class TestFieldWithValidators(TestCase):
     def test_all_errors_get_reported(self):
-        form = UserForm({'full_name': 'not int nor mail', 'string': '2 is not correct', 'ignore_case_string': "IgnORE Case strIng"})
-        self.assertRaises(ValidationError, form.fields['full_name'].clean, 'not int nor mail')
-
-        try:
+        form = UserForm({
+            'full_name': 'not int nor mail',
+            'string': '2 is not correct',
+            'ignore_case_string': "IgnORE Case strIng",
+        })
+        with self.assertRaises(ValidationError) as e:
             form.fields['full_name'].clean('not int nor mail')
-        except ValidationError as e:
-            self.assertEqual(2, len(e.messages))
+        self.assertEqual(2, len(e.exception.messages))
 
         self.assertFalse(form.is_valid())
         self.assertEqual(form.errors['string'], ["Letters only."])

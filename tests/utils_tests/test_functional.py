@@ -1,6 +1,10 @@
+# -*- encoding: utf-8 -*-
+from __future__ import unicode_literals
+
 import unittest
 
-from django.utils.functional import lazy, lazy_property, cached_property
+from django.utils import six
+from django.utils.functional import cached_property, lazy, lazy_property
 
 
 class FunctionalTestCase(unittest.TestCase):
@@ -22,6 +26,20 @@ class FunctionalTestCase(unittest.TestCase):
         t = lazy(lambda: Klazz(), Klazz)()
         self.assertIn('base_method', dir(t))
 
+    def test_lazy_base_class_override(self):
+        """Test that lazy finds the correct (overridden) method implementation"""
+
+        class Base(object):
+            def method(self):
+                return 'Base'
+
+        class Klazz(Base):
+            def method(self):
+                return 'Klazz'
+
+        t = lazy(lambda: Klazz(), Base)()
+        self.assertEqual(t.method(), 'Klazz')
+
     def test_lazy_property(self):
 
         class A(object):
@@ -37,8 +55,29 @@ class FunctionalTestCase(unittest.TestCase):
             def _get_do(self):
                 return "DO IT"
 
-        self.assertRaises(NotImplementedError, lambda: A().do)
+        with self.assertRaises(NotImplementedError):
+            A().do
         self.assertEqual(B().do, 'DO IT')
+
+    def test_lazy_object_to_string(self):
+
+        class Klazz(object):
+            if six.PY3:
+                def __str__(self):
+                    return "Î am ā Ǩlâzz."
+
+                def __bytes__(self):
+                    return b"\xc3\x8e am \xc4\x81 binary \xc7\xa8l\xc3\xa2zz."
+            else:
+                def __unicode__(self):
+                    return "Î am ā Ǩlâzz."
+
+                def __str__(self):
+                    return b"\xc3\x8e am \xc4\x81 binary \xc7\xa8l\xc3\xa2zz."
+
+        t = lazy(lambda: Klazz(), Klazz)()
+        self.assertEqual(six.text_type(t), "Î am ā Ǩlâzz.")
+        self.assertEqual(six.binary_type(t), b"\xc3\x8e am \xc4\x81 binary \xc7\xa8l\xc3\xa2zz.")
 
     def test_cached_property(self):
         """

@@ -4,6 +4,7 @@ from django.db import models
 from django.db.models import signals
 from django.dispatch import receiver
 from django.test import TestCase
+from django.test.utils import isolate_apps
 from django.utils import six
 
 from .models import Author, Book, Car, Person
@@ -32,6 +33,20 @@ class BaseSignalTest(TestCase):
 
 
 class SignalTests(BaseSignalTest):
+    def test_model_pre_init_and_post_init(self):
+        data = []
+
+        def pre_init_callback(sender, args, **kwargs):
+            data.append(kwargs['kwargs'])
+        signals.pre_init.connect(pre_init_callback)
+
+        def post_init_callback(sender, instance, **kwargs):
+            data.append(instance)
+        signals.post_init.connect(post_init_callback)
+
+        p1 = Person(first_name="John", last_name="Doe")
+        self.assertEqual(data, [{}, p1])
+
     def test_save_signals(self):
         data = []
 
@@ -154,7 +169,7 @@ class SignalTests(BaseSignalTest):
             data.append(instance)
 
         try:
-            c1 = Car.objects.create(make="Volkswagon", model="Passat")
+            c1 = Car.objects.create(make="Volkswagen", model="Passat")
             self.assertEqual(data, [c1, c1])
         finally:
             signals.pre_save.disconnect(decorated_handler)
@@ -208,9 +223,9 @@ class SignalTests(BaseSignalTest):
             data[:] = []
 
             # Assigning and removing to/from m2m shouldn't generate an m2m signal.
-            b1.authors = [a1]
+            b1.authors.set([a1])
             self.assertEqual(data, [])
-            b1.authors = []
+            b1.authors.set([])
             self.assertEqual(data, [])
         finally:
             signals.pre_save.disconnect(pre_save_handler)
@@ -271,6 +286,7 @@ class LazyModelRefTest(BaseSignalTest):
         finally:
             signals.post_init.disconnect(self.receiver, sender=Book)
 
+    @isolate_apps('signals')
     def test_not_loaded_model(self):
         signals.post_init.connect(
             self.receiver, sender='signals.Created', weak=False

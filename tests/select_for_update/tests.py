@@ -1,26 +1,17 @@
 from __future__ import unicode_literals
 
+import threading
 import time
-import unittest
-
-from django.conf import settings
-from django.db import transaction, connection, router
-from django.db.utils import ConnectionHandler, DEFAULT_DB_ALIAS, DatabaseError
-from django.test import (TransactionTestCase, skipIfDBFeature,
-    skipUnlessDBFeature)
-from django.test import override_settings
 
 from multiple_database.routers import TestRouter
 
-from .models import Person
+from django.db import DatabaseError, connection, router, transaction
+from django.test import (
+    TransactionTestCase, override_settings, skipIfDBFeature,
+    skipUnlessDBFeature,
+)
 
-# Some tests require threading, which might not be available. So create a
-# skip-test decorator for those test functions.
-try:
-    import threading
-except ImportError:
-    threading = None
-requires_threading = unittest.skipUnless(threading, 'requires threading')
+from .models import Person
 
 
 # We need to set settings.DEBUG to True so we can capture the output SQL
@@ -37,8 +28,7 @@ class SelectForUpdateTests(TransactionTestCase):
 
         # We need another database connection in transaction to test that one
         # connection issuing a SELECT ... FOR UPDATE will block.
-        new_connections = ConnectionHandler(settings.DATABASES)
-        self.new_connection = new_connections[DEFAULT_DB_ALIAS]
+        self.new_connection = connection.copy()
 
     def tearDown(self):
         try:
@@ -91,7 +81,6 @@ class SelectForUpdateTests(TransactionTestCase):
             list(Person.objects.all().select_for_update(nowait=True))
         self.assertTrue(self.has_for_update_sql(connection, nowait=True))
 
-    @requires_threading
     @skipUnlessDBFeature('has_select_for_update_nowait')
     def test_nowait_raises_error_on_block(self):
         """
@@ -121,11 +110,8 @@ class SelectForUpdateTests(TransactionTestCase):
         that supports FOR UPDATE but not NOWAIT, then we should find
         that a DatabaseError is raised.
         """
-        self.assertRaises(
-            DatabaseError,
-            list,
-            Person.objects.all().select_for_update(nowait=True)
-        )
+        with self.assertRaises(DatabaseError):
+            list(Person.objects.all().select_for_update(nowait=True))
 
     @skipUnlessDBFeature('has_select_for_update')
     def test_for_update_requires_transaction(self):
@@ -172,7 +158,6 @@ class SelectForUpdateTests(TransactionTestCase):
             # database connection. Close it without waiting for the GC.
             connection.close()
 
-    @requires_threading
     @skipUnlessDBFeature('has_select_for_update')
     @skipUnlessDBFeature('supports_transactions')
     def test_block(self):
@@ -222,7 +207,6 @@ class SelectForUpdateTests(TransactionTestCase):
         p = Person.objects.get(pk=self.person.pk)
         self.assertEqual('Fred', p.name)
 
-    @requires_threading
     @skipUnlessDBFeature('has_select_for_update')
     def test_raw_lock_not_available(self):
         """
@@ -257,14 +241,10 @@ class SelectForUpdateTests(TransactionTestCase):
         self.assertIsInstance(status[-1], DatabaseError)
 
     @skipUnlessDBFeature('has_select_for_update')
+    @override_settings(DATABASE_ROUTERS=[TestRouter()])
     def test_select_for_update_on_multidb(self):
-        old_routers = router.routers
-        try:
-            router.routers = [TestRouter()]
-            query = Person.objects.select_for_update()
-            self.assertEqual(router.db_for_write(Person), query.db)
-        finally:
-            router.routers = old_routers
+        query = Person.objects.select_for_update()
+        self.assertEqual(router.db_for_write(Person), query.db)
 
     @skipUnlessDBFeature('has_select_for_update')
     def test_select_for_update_with_get(self):

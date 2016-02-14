@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-import warnings
-
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.forms import (
     BooleanField, CharField, ChoiceField, DateField, DateTimeField,
     DecimalField, EmailField, FileField, FloatField, Form,
-    GenericIPAddressField, IntegerField, IPAddressField, ModelChoiceField,
+    GenericIPAddressField, IntegerField, ModelChoiceField,
     ModelMultipleChoiceField, MultipleChoiceField, RegexField,
-    SplitDateTimeField, TimeField, URLField, utils, ValidationError,
+    SplitDateTimeField, TimeField, URLField, ValidationError, utils,
 )
-from django.test import TestCase
-from django.utils.safestring import mark_safe
+from django.test import SimpleTestCase, TestCase
 from django.utils.encoding import python_2_unicode_compatible
+from django.utils.safestring import mark_safe
 
 
 class AssertFormErrorsMixin(object):
@@ -25,7 +23,7 @@ class AssertFormErrorsMixin(object):
             self.assertEqual(e.messages, expected)
 
 
-class FormsErrorMessagesTestCase(TestCase, AssertFormErrorsMixin):
+class FormsErrorMessagesTestCase(SimpleTestCase, AssertFormErrorsMixin):
     def test_charfield(self):
         e = {
             'required': 'REQUIRED',
@@ -159,7 +157,11 @@ class FormsErrorMessagesTestCase(TestCase, AssertFormErrorsMixin):
         f = URLField(error_messages=e, max_length=17)
         self.assertFormErrors(['REQUIRED'], f.clean, '')
         self.assertFormErrors(['INVALID'], f.clean, 'abc.c')
-        self.assertFormErrors(['"http://djangoproject.com" has more than 17 characters.'], f.clean, 'djangoproject.com')
+        self.assertFormErrors(
+            ['"http://djangoproject.com" has more than 17 characters.'],
+            f.clean,
+            'djangoproject.com'
+        )
 
     def test_booleanfield(self):
         e = {
@@ -198,17 +200,6 @@ class FormsErrorMessagesTestCase(TestCase, AssertFormErrorsMixin):
         self.assertFormErrors(['REQUIRED'], f.clean, '')
         self.assertFormErrors(['INVALID DATE', 'INVALID TIME'], f.clean, ['a', 'b'])
 
-    def test_ipaddressfield(self):
-        e = {
-            'required': 'REQUIRED',
-            'invalid': 'INVALID IP ADDRESS',
-        }
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            f = IPAddressField(error_messages=e)
-        self.assertFormErrors(['REQUIRED'], f.clean, '')
-        self.assertFormErrors(['INVALID IP ADDRESS'], f.clean, '127.0.0')
-
     def test_generic_ipaddressfield(self):
         e = {
             'required': 'REQUIRED',
@@ -239,8 +230,14 @@ class FormsErrorMessagesTestCase(TestCase, AssertFormErrorsMixin):
 
         # This form should print errors the default way.
         form1 = TestForm({'first_name': 'John'})
-        self.assertHTMLEqual(str(form1['last_name'].errors), '<ul class="errorlist"><li>This field is required.</li></ul>')
-        self.assertHTMLEqual(str(form1.errors['__all__']), '<ul class="errorlist nonfield"><li>I like to be awkward.</li></ul>')
+        self.assertHTMLEqual(
+            str(form1['last_name'].errors),
+            '<ul class="errorlist"><li>This field is required.</li></ul>'
+        )
+        self.assertHTMLEqual(
+            str(form1.errors['__all__']),
+            '<ul class="errorlist nonfield"><li>I like to be awkward.</li></ul>'
+        )
 
         # This one should wrap error groups in the customized way.
         form2 = TestForm({'first_name': 'John'}, error_class=CustomErrorList)

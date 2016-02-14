@@ -2,7 +2,7 @@
 from __future__ import unicode_literals
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connections, DEFAULT_DB_ALIAS
+from django.db import DEFAULT_DB_ALIAS, connections
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.loader import AmbiguityError
 
@@ -50,6 +50,9 @@ class Command(BaseCommand):
             raise CommandError("Cannot find a migration matching '%s' from app '%s'. Is it in INSTALLED_APPS?" % (
                 migration_name, app_label))
         targets = [(app_label, migration.name)]
+
+        # Show begin/end around output only for atomic migrations
+        self.output_transaction = migration.atomic
 
         # Make a plan that represents just the requested migrations and show SQL
         # for it

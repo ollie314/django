@@ -3,12 +3,14 @@ from __future__ import unicode_literals
 
 from django.conf import settings
 from django.core import checks
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from django.db.models.fields import FieldDoesNotExist
 
 
 class CurrentSiteManager(models.Manager):
     "Use this to limit objects to those associated with the current site."
+
+    use_in_migrations = True
 
     def __init__(self, field_name=None):
         super(CurrentSiteManager, self).__init__()
@@ -27,7 +29,6 @@ class CurrentSiteManager(models.Manager):
             return [
                 checks.Error(
                     "CurrentSiteManager could not find a field named '%s'." % field_name,
-                    hint=None,
                     obj=self,
                     id='sites.E001',
                 )
@@ -39,7 +40,6 @@ class CurrentSiteManager(models.Manager):
                     "CurrentSiteManager cannot use '%s.%s' as it is not a ForeignKey or ManyToManyField." % (
                         self.model._meta.object_name, field_name
                     ),
-                    hint=None,
                     obj=self,
                     id='sites.E002',
                 )

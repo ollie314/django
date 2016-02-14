@@ -1,19 +1,17 @@
 import imp
-from importlib import import_module
 import os
 import sys
 import unittest
-import warnings
+from importlib import import_module
 from zipimport import zipimporter
 
-from django.core.exceptions import ImproperlyConfigured
-from django.test import SimpleTestCase, modify_settings
-from django.test.utils import IgnoreDeprecationWarningsMixin, extend_sys_path
+from django.test import SimpleTestCase, TestCase, modify_settings
+from django.test.utils import extend_sys_path
 from django.utils import six
-from django.utils.deprecation import RemovedInDjango19Warning
-from django.utils.module_loading import (autodiscover_modules, import_by_path, import_string,
-                                         module_has_submodule)
 from django.utils._os import upath
+from django.utils.module_loading import (
+    autodiscover_modules, import_string, module_has_submodule,
+)
 
 
 class DefaultLoader(unittest.TestCase):
@@ -36,15 +34,18 @@ class DefaultLoader(unittest.TestCase):
 
         # A child that exists, but will generate an import error if loaded
         self.assertTrue(module_has_submodule(test_module, 'bad_module'))
-        self.assertRaises(ImportError, import_module, 'utils_tests.test_module.bad_module')
+        with self.assertRaises(ImportError):
+            import_module('utils_tests.test_module.bad_module')
 
         # A child that doesn't exist
         self.assertFalse(module_has_submodule(test_module, 'no_such_module'))
-        self.assertRaises(ImportError, import_module, 'utils_tests.test_module.no_such_module')
+        with self.assertRaises(ImportError):
+            import_module('utils_tests.test_module.no_such_module')
 
         # A child that doesn't exist, but is the name of a package on the path
         self.assertFalse(module_has_submodule(test_module, 'django'))
-        self.assertRaises(ImportError, import_module, 'utils_tests.test_module.django')
+        with self.assertRaises(ImportError):
+            import_module('utils_tests.test_module.django')
 
         # Don't be confused by caching of import misses
         import types  # NOQA: causes attempted import of utils_tests.types
@@ -52,8 +53,8 @@ class DefaultLoader(unittest.TestCase):
 
         # A module which doesn't have a __path__ (so no submodules)
         self.assertFalse(module_has_submodule(test_no_submodule, 'anything'))
-        self.assertRaises(ImportError, import_module,
-            'utils_tests.test_no_submodule.anything')
+        with self.assertRaises(ImportError):
+            import_module('utils_tests.test_no_submodule.anything')
 
 
 class EggLoader(unittest.TestCase):
@@ -84,11 +85,13 @@ class EggLoader(unittest.TestCase):
 
             # A child that exists, but will generate an import error if loaded
             self.assertTrue(module_has_submodule(egg_module, 'bad_module'))
-            self.assertRaises(ImportError, import_module, 'egg_module.bad_module')
+            with self.assertRaises(ImportError):
+                import_module('egg_module.bad_module')
 
             # A child that doesn't exist
             self.assertFalse(module_has_submodule(egg_module, 'no_such_module'))
-            self.assertRaises(ImportError, import_module, 'egg_module.no_such_module')
+            with self.assertRaises(ImportError):
+                import_module('egg_module.no_such_module')
 
     def test_deep_loader(self):
         "Modules deep inside an egg can still be tested for existence"
@@ -103,53 +106,26 @@ class EggLoader(unittest.TestCase):
 
             # A child that exists, but will generate an import error if loaded
             self.assertTrue(module_has_submodule(egg_module, 'bad_module'))
-            self.assertRaises(ImportError, import_module, 'egg_module.sub1.sub2.bad_module')
+            with self.assertRaises(ImportError):
+                import_module('egg_module.sub1.sub2.bad_module')
 
             # A child that doesn't exist
             self.assertFalse(module_has_submodule(egg_module, 'no_such_module'))
-            self.assertRaises(ImportError, import_module, 'egg_module.sub1.sub2.no_such_module')
+            with self.assertRaises(ImportError):
+                import_module('egg_module.sub1.sub2.no_such_module')
 
 
-class ModuleImportTestCase(IgnoreDeprecationWarningsMixin, unittest.TestCase):
-    def test_import_by_path(self):
-        cls = import_by_path('django.utils.module_loading.import_by_path')
-        self.assertEqual(cls, import_by_path)
-
-        # Test exceptions raised
-        for path in ('no_dots_in_path', 'unexistent.path', 'utils_tests.unexistent'):
-            self.assertRaises(ImproperlyConfigured, import_by_path, path)
-
-        with self.assertRaises(ImproperlyConfigured) as cm:
-            import_by_path('unexistent.module.path', error_prefix="Foo")
-        self.assertTrue(str(cm.exception).startswith('Foo'))
-
-    def test_import_error_traceback(self):
-        """Test preserving the original traceback on an ImportError."""
-        try:
-            import_by_path('test_module.bad_module.content')
-        except ImproperlyConfigured:
-            traceback = sys.exc_info()[2]
-
-        self.assertIsNotNone(traceback.tb_next.tb_next,
-            'Should have more than the calling frame in the traceback.')
-
-    def test_import_by_path_pending_deprecation_warning(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter('always', category=RemovedInDjango19Warning)
-            cls = import_by_path('django.utils.module_loading.import_by_path')
-            self.assertEqual(cls, import_by_path)
-            self.assertEqual(len(w), 1)
-            self.assertTrue(issubclass(w[-1].category, RemovedInDjango19Warning))
-            self.assertIn('deprecated', str(w[-1].message))
-
+class ModuleImportTestCase(TestCase):
     def test_import_string(self):
         cls = import_string('django.utils.module_loading.import_string')
         self.assertEqual(cls, import_string)
 
         # Test exceptions raised
-        self.assertRaises(ImportError, import_string, 'no_dots_in_path')
-        self.assertRaises(ImportError, import_string, 'utils_tests.unexistent')
-        self.assertRaises(ImportError, import_string, 'unexistent.path')
+        with self.assertRaises(ImportError):
+            import_string('no_dots_in_path')
+        msg = 'Module "utils_tests" does not define a "unexistent" attribute'
+        with self.assertRaisesMessage(ImportError, msg):
+            import_string('utils_tests.unexistent')
 
 
 @modify_settings(INSTALLED_APPS={'append': 'utils_tests.test_module'})
@@ -188,13 +164,13 @@ class AutodiscoverModulesTestCase(SimpleTestCase):
 
     def test_validate_registry_keeps_intact(self):
         from .test_module import site
-        with six.assertRaisesRegex(self, Exception, "Some random exception."):
+        with self.assertRaisesMessage(Exception, "Some random exception."):
             autodiscover_modules('another_bad_module', register_to=site)
         self.assertEqual(site._registry, {})
 
     def test_validate_registry_resets_after_erroneous_module(self):
         from .test_module import site
-        with six.assertRaisesRegex(self, Exception, "Some random exception."):
+        with self.assertRaisesMessage(Exception, "Some random exception."):
             autodiscover_modules('another_good_module', 'another_bad_module', register_to=site)
         self.assertEqual(site._registry, {'lorem': 'ipsum'})
 

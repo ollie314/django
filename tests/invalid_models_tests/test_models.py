@@ -5,10 +5,9 @@ import unittest
 
 from django.conf import settings
 from django.core.checks import Error
-from django.db import models, connections
-from django.test.utils import override_settings
-
-from .base import IsolatedModelsTestCase
+from django.db import connections, models
+from django.test import SimpleTestCase
+from django.test.utils import isolate_apps, override_settings
 
 
 def get_max_column_name_length():
@@ -31,7 +30,8 @@ def get_max_column_name_length():
     return (allowed_len, db_alias)
 
 
-class IndexTogetherTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class IndexTogetherTests(SimpleTestCase):
 
     def test_non_iterable(self):
         class Model(models.Model):
@@ -42,7 +42,6 @@ class IndexTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'index_together' must be a list or tuple.",
-                hint=None,
                 obj=Model,
                 id='models.E008',
             ),
@@ -58,7 +57,6 @@ class IndexTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'index_together' must be a list or tuple.",
-                hint=None,
                 obj=Model,
                 id='models.E008',
             ),
@@ -74,7 +72,6 @@ class IndexTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "All 'index_together' elements must be lists or tuples.",
-                hint=None,
                 obj=Model,
                 id='models.E009',
             ),
@@ -92,7 +89,6 @@ class IndexTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'index_together' refers to the non-existent field 'missing_field'.",
-                hint=None,
                 obj=Model,
                 id='models.E012',
             ),
@@ -114,8 +110,8 @@ class IndexTogetherTests(IsolatedModelsTestCase):
         errors = Bar.check()
         expected = [
             Error(
-                ("'index_together' refers to field 'field1' which is not "
-                 "local to model 'Bar'."),
+                "'index_together' refers to field 'field1' which is not "
+                "local to model 'Bar'.",
                 hint=("This issue may be caused by multi-table inheritance."),
                 obj=Bar,
                 id='models.E016',
@@ -135,9 +131,8 @@ class IndexTogetherTests(IsolatedModelsTestCase):
         errors = Model.check()
         expected = [
             Error(
-                ("'index_together' refers to a ManyToManyField 'm2m', but "
-                 "ManyToManyFields are not permitted in 'index_together'."),
-                hint=None,
+                "'index_together' refers to a ManyToManyField 'm2m', but "
+                "ManyToManyFields are not permitted in 'index_together'.",
                 obj=Model,
                 id='models.E013',
             ),
@@ -146,7 +141,8 @@ class IndexTogetherTests(IsolatedModelsTestCase):
 
 
 # unique_together tests are very similar to index_together tests.
-class UniqueTogetherTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class UniqueTogetherTests(SimpleTestCase):
 
     def test_non_iterable(self):
         class Model(models.Model):
@@ -157,7 +153,6 @@ class UniqueTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'unique_together' must be a list or tuple.",
-                hint=None,
                 obj=Model,
                 id='models.E010',
             ),
@@ -176,7 +171,6 @@ class UniqueTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "All 'unique_together' elements must be lists or tuples.",
-                hint=None,
                 obj=Model,
                 id='models.E011',
             ),
@@ -192,7 +186,6 @@ class UniqueTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'unique_together' must be a list or tuple.",
-                hint=None,
                 obj=Model,
                 id='models.E010',
             ),
@@ -222,7 +215,6 @@ class UniqueTogetherTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'unique_together' refers to the non-existent field 'missing_field'.",
-                hint=None,
                 obj=Model,
                 id='models.E012',
             ),
@@ -241,9 +233,8 @@ class UniqueTogetherTests(IsolatedModelsTestCase):
         errors = Model.check()
         expected = [
             Error(
-                ("'unique_together' refers to a ManyToManyField 'm2m', but "
-                 "ManyToManyFields are not permitted in 'unique_together'."),
-                hint=None,
+                "'unique_together' refers to a ManyToManyField 'm2m', but "
+                "ManyToManyFields are not permitted in 'unique_together'.",
                 obj=Model,
                 id='models.E013',
             ),
@@ -251,7 +242,8 @@ class UniqueTogetherTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class FieldNamesTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class FieldNamesTests(SimpleTestCase):
 
     def test_ending_with_underscore(self):
         class Model(models.Model):
@@ -262,13 +254,11 @@ class FieldNamesTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 'Field names must not end with an underscore.',
-                hint=None,
                 obj=Model._meta.get_field('field_'),
                 id='fields.E001',
             ),
             Error(
                 'Field names must not end with an underscore.',
-                hint=None,
                 obj=Model._meta.get_field('m2m_'),
                 id='fields.E001',
             ),
@@ -305,22 +295,28 @@ class FieldNamesTests(IsolatedModelsTestCase):
                 related_name="rn3",
                 through='m2mcomplex'
             )
-            fk = models.ForeignKey(VeryLongModelNamezzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz, related_name="rn4")
+            fk = models.ForeignKey(
+                VeryLongModelNamezzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz,
+                models.CASCADE,
+                related_name="rn4",
+            )
 
         # Models used for setting `through` in M2M field.
         class m2msimple(models.Model):
-            id2 = models.ForeignKey(ModelWithLongField)
+            id2 = models.ForeignKey(ModelWithLongField, models.CASCADE)
 
         class m2mcomplex(models.Model):
-            id2 = models.ForeignKey(ModelWithLongField)
+            id2 = models.ForeignKey(ModelWithLongField, models.CASCADE)
 
         long_field_name = 'a' * (self.max_column_name_length + 1)
         models.ForeignKey(
-            VeryLongModelNamezzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+            VeryLongModelNamezzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz,
+            models.CASCADE,
         ).contribute_to_class(m2msimple, long_field_name)
 
         models.ForeignKey(
             VeryLongModelNamezzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz,
+            models.CASCADE,
             db_column=long_field_name
         ).contribute_to_class(m2mcomplex, long_field_name)
 
@@ -328,28 +324,32 @@ class FieldNamesTests(IsolatedModelsTestCase):
 
         # First error because of M2M field set on the model with long name.
         m2m_long_name = "verylongmodelnamezzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz_id"
-        expected = [
-            Error(
-                ('Autogenerated column name too long for M2M field "%s". '
-                'Maximum length is "%s" for database "%s".'
-                % (m2m_long_name, self.max_column_name_length, self.column_limit_db_alias)),
-                hint=("Use 'through' to create a separate model for "
-                    "M2M and then set column_name using 'db_column'."),
-                obj=ModelWithLongField,
-                id='models.E019',
-            )
-        ]
+        if self.max_column_name_length > len(m2m_long_name):
+            # Some databases support names longer than the test name.
+            expected = []
+        else:
+            expected = [
+                Error(
+                    'Autogenerated column name too long for M2M field "%s". '
+                    'Maximum length is "%s" for database "%s".'
+                    % (m2m_long_name, self.max_column_name_length, self.column_limit_db_alias),
+                    hint=("Use 'through' to create a separate model for "
+                        "M2M and then set column_name using 'db_column'."),
+                    obj=ModelWithLongField,
+                    id='models.E019',
+                )
+            ]
 
         # Second error because the FK specified in the `through` model
-        # `m2msimple` has auto-genererated name longer than allowed.
+        # `m2msimple` has auto-generated name longer than allowed.
         # There will be no check errors in the other M2M because it
         # specifies db_column for the FK in `through` model even if the actual
         # name is longer than the limits of the database.
         expected.append(
             Error(
-                ('Autogenerated column name too long for M2M field "%s_id". '
+                'Autogenerated column name too long for M2M field "%s_id". '
                 'Maximum length is "%s" for database "%s".'
-                % (long_field_name, self.max_column_name_length, self.column_limit_db_alias)),
+                % (long_field_name, self.max_column_name_length, self.column_limit_db_alias),
                 hint=("Use 'through' to create a separate model for "
                     "M2M and then set column_name using 'db_column'."),
                 obj=ModelWithLongField,
@@ -382,9 +382,9 @@ class FieldNamesTests(IsolatedModelsTestCase):
         # without specifying db_column
         expected = [
             Error(
-                ('Autogenerated column name too long for field "%s". '
+                'Autogenerated column name too long for field "%s". '
                 'Maximum length is "%s" for database "%s".'
-                % (long_field_name, self.max_column_name_length, self.column_limit_db_alias)),
+                % (long_field_name, self.max_column_name_length, self.column_limit_db_alias),
                 hint="Set the column name manually using 'db_column'.",
                 obj=ModelWithLongField,
                 id='models.E018',
@@ -401,7 +401,6 @@ class FieldNamesTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 'Field names must not contain "__".',
-                hint=None,
                 obj=Model._meta.get_field('some__field'),
                 id='fields.E002',
             )
@@ -416,7 +415,6 @@ class FieldNamesTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'pk' is a reserved word that cannot be used as a field name.",
-                hint=None,
                 obj=Model._meta.get_field('pk'),
                 id='fields.E003',
             )
@@ -424,7 +422,26 @@ class FieldNamesTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class ShadowingFieldsTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class ShadowingFieldsTests(SimpleTestCase):
+
+    def test_field_name_clash_with_child_accessor(self):
+        class Parent(models.Model):
+            pass
+
+        class Child(Parent):
+            child = models.CharField(max_length=100)
+
+        errors = Child.check()
+        expected = [
+            Error(
+                "The field 'child' clashes with the field "
+                "'child' from model 'invalid_models_tests.parent'.",
+                obj=Child._meta.get_field('child'),
+                id='models.E006',
+            )
+        ]
+        self.assertEqual(errors, expected)
 
     def test_multiinheritance_clash(self):
         class Mother(models.Model):
@@ -441,18 +458,16 @@ class ShadowingFieldsTests(IsolatedModelsTestCase):
         errors = Child.check()
         expected = [
             Error(
-                ("The field 'id' from parent model "
-                 "'invalid_models_tests.mother' clashes with the field 'id' "
-                 "from parent model 'invalid_models_tests.father'."),
-                hint=None,
+                "The field 'id' from parent model "
+                "'invalid_models_tests.mother' clashes with the field 'id' "
+                "from parent model 'invalid_models_tests.father'.",
                 obj=Child,
                 id='models.E005',
             ),
             Error(
-                ("The field 'clash' from parent model "
-                 "'invalid_models_tests.mother' clashes with the field 'clash' "
-                 "from parent model 'invalid_models_tests.father'."),
-                hint=None,
+                "The field 'clash' from parent model "
+                "'invalid_models_tests.mother' clashes with the field 'clash' "
+                "from parent model 'invalid_models_tests.father'.",
                 obj=Child,
                 id='models.E005',
             )
@@ -469,15 +484,38 @@ class ShadowingFieldsTests(IsolatedModelsTestCase):
 
         class Child(Parent):
             # This field clashes with parent "f_id" field.
-            f = models.ForeignKey(Target)
+            f = models.ForeignKey(Target, models.CASCADE)
 
         errors = Child.check()
         expected = [
             Error(
-                ("The field 'f' clashes with the field 'f_id' "
-                 "from model 'invalid_models_tests.parent'."),
-                hint=None,
+                "The field 'f' clashes with the field 'f_id' "
+                "from model 'invalid_models_tests.parent'.",
                 obj=Child._meta.get_field('f'),
+                id='models.E006',
+            )
+        ]
+        self.assertEqual(errors, expected)
+
+    def test_multigeneration_inheritance(self):
+        class GrandParent(models.Model):
+            clash = models.IntegerField()
+
+        class Parent(GrandParent):
+            pass
+
+        class Child(Parent):
+            pass
+
+        class GrandChild(Child):
+            clash = models.IntegerField()
+
+        errors = GrandChild.check()
+        expected = [
+            Error(
+                "The field 'clash' clashes with the field 'clash' "
+                "from model 'invalid_models_tests.grandparent'.",
+                obj=GrandChild._meta.get_field('clash'),
                 id='models.E006',
             )
         ]
@@ -488,15 +526,14 @@ class ShadowingFieldsTests(IsolatedModelsTestCase):
             pass
 
         class Model(models.Model):
-            fk = models.ForeignKey(Target)
+            fk = models.ForeignKey(Target, models.CASCADE)
             fk_id = models.IntegerField()
 
         errors = Model.check()
         expected = [
             Error(
-                ("The field 'fk_id' clashes with the field 'fk' from model "
-                 "'invalid_models_tests.model'."),
-                hint=None,
+                "The field 'fk_id' clashes with the field 'fk' from model "
+                "'invalid_models_tests.model'.",
                 obj=Model._meta.get_field('fk_id'),
                 id='models.E006',
             )
@@ -504,7 +541,8 @@ class ShadowingFieldsTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
 
-class OtherModelTests(IsolatedModelsTestCase):
+@isolate_apps('invalid_models_tests')
+class OtherModelTests(SimpleTestCase):
 
     def test_unique_primary_key(self):
         invalid_id = models.IntegerField(primary_key=False)
@@ -515,8 +553,8 @@ class OtherModelTests(IsolatedModelsTestCase):
         errors = Model.check()
         expected = [
             Error(
-                "'id' can only be used as a field name if the field also sets 'primary_key=True'.",
-                hint=None,
+                "'id' can only be used as a field name if the field also sets "
+                "'primary_key=True'.",
                 obj=Model,
                 id='models.E004',
             ),
@@ -531,11 +569,53 @@ class OtherModelTests(IsolatedModelsTestCase):
         errors = Model.check()
         expected = [
             Error(
-                ("'ordering' must be a tuple or list "
-                 "(even if you want to order by only one field)."),
-                hint=None,
+                "'ordering' must be a tuple or list "
+                "(even if you want to order by only one field).",
                 obj=Model,
                 id='models.E014',
+            ),
+        ]
+        self.assertEqual(errors, expected)
+
+    def test_just_ordering_no_errors(self):
+        class Model(models.Model):
+            order = models.PositiveIntegerField()
+
+            class Meta:
+                ordering = ['order']
+
+        self.assertEqual(Model.check(), [])
+
+    def test_just_order_with_respect_to_no_errors(self):
+        class Question(models.Model):
+            pass
+
+        class Answer(models.Model):
+            question = models.ForeignKey(Question, models.CASCADE)
+
+            class Meta:
+                order_with_respect_to = 'question'
+
+        self.assertEqual(Answer.check(), [])
+
+    def test_ordering_with_order_with_respect_to(self):
+        class Question(models.Model):
+            pass
+
+        class Answer(models.Model):
+            question = models.ForeignKey(Question, models.CASCADE)
+            order = models.IntegerField()
+
+            class Meta:
+                order_with_respect_to = 'question'
+                ordering = ['order']
+
+        errors = Answer.check()
+        expected = [
+            Error(
+                "'ordering' and 'order_with_respect_to' cannot be used together.",
+                obj=Answer,
+                id='models.E021',
             ),
         ]
         self.assertEqual(errors, expected)
@@ -554,7 +634,6 @@ class OtherModelTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'ordering' refers to the non-existent field 'relation'.",
-                hint=None,
                 obj=Model,
                 id='models.E015',
             ),
@@ -570,7 +649,6 @@ class OtherModelTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'ordering' refers to the non-existent field 'missing_field'.",
-                hint=None,
                 obj=Model,
                 id='models.E015',
             )
@@ -590,7 +668,6 @@ class OtherModelTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'ordering' refers to the non-existent field 'missing_fk_field_id'.",
-                hint=None,
                 obj=Model,
                 id='models.E015',
             )
@@ -604,7 +681,7 @@ class OtherModelTests(IsolatedModelsTestCase):
             pass
 
         class Child(models.Model):
-            parent = models.ForeignKey(Parent)
+            parent = models.ForeignKey(Parent, models.CASCADE)
 
             class Meta:
                 ordering = ("parent_id",)
@@ -621,8 +698,6 @@ class OtherModelTests(IsolatedModelsTestCase):
         expected = [
             Error(
                 "'TEST_SWAPPED_MODEL_BAD_VALUE' is not of the form 'app_label.app_name'.",
-                hint=None,
-                obj=None,
                 id='models.E001',
             ),
         ]
@@ -637,10 +712,8 @@ class OtherModelTests(IsolatedModelsTestCase):
         errors = Model.check()
         expected = [
             Error(
-                ("'TEST_SWAPPED_MODEL_BAD_MODEL' references 'not_an_app.Target', "
-                 'which has not been installed, or is abstract.'),
-                hint=None,
-                obj=None,
+                "'TEST_SWAPPED_MODEL_BAD_MODEL' references 'not_an_app.Target', "
+                'which has not been installed, or is abstract.',
                 id='models.E002',
             ),
         ]
@@ -657,15 +730,14 @@ class OtherModelTests(IsolatedModelsTestCase):
                 related_name="secondary")
 
         class Membership(models.Model):
-            person = models.ForeignKey(Person)
-            group = models.ForeignKey(Group)
+            person = models.ForeignKey(Person, models.CASCADE)
+            group = models.ForeignKey(Group, models.CASCADE)
 
         errors = Group.check()
         expected = [
             Error(
-                ("The model has two many-to-many relations through "
-                 "the intermediate model 'invalid_models_tests.Membership'."),
-                hint=None,
+                "The model has two many-to-many relations through "
+                "the intermediate model 'invalid_models_tests.Membership'.",
                 obj=Group,
                 id='models.E003',
             )

@@ -1,15 +1,18 @@
 from __future__ import unicode_literals
 
 from django import forms
-from django.forms.formsets import BaseFormSet, DELETION_FIELD_NAME
+from django.forms.formsets import DELETION_FIELD_NAME, BaseFormSet
+from django.forms.models import (
+    BaseModelFormSet, inlineformset_factory, modelform_factory,
+    modelformset_factory,
+)
 from django.forms.utils import ErrorDict, ErrorList
-from django.forms.models import modelform_factory, inlineformset_factory, modelformset_factory, BaseModelFormSet
 from django.test import TestCase
 from django.utils import six
 
 from .models import (
-    User, UserSite, UserProfile, ProfileNetwork, Restaurant, Manager, Network,
-    Host,
+    Host, Manager, Network, ProfileNetwork, Restaurant, User, UserProfile,
+    UserSite,
 )
 
 
@@ -199,7 +202,10 @@ class InlineFormsetTests(TestCase):
         FormSet(instance=None)
 
     def test_empty_fields_on_modelformset(self):
-        "No fields passed to modelformset_factory should result in no fields on returned forms except for the id. See #14119."
+        """
+        No fields passed to modelformset_factory() should result in no fields
+        on returned forms except for the id (#14119).
+        """
         UserFormSet = modelformset_factory(User, fields=())
         formset = UserFormSet()
         for form in formset.forms:
@@ -211,7 +217,6 @@ class InlineFormsetTests(TestCase):
         Existing and new inlines are saved with save_as_new.
 
         Regression for #14938.
-
         """
         efnet = Network.objects.create(name="EFNet")
         host1 = Host.objects.create(hostname="irc.he.net", network=efnet)
@@ -438,10 +443,10 @@ class FormfieldShouldDeleteFormTests(TestCase):
         # pass standard data dict & see none updated
         data = dict(self.data)
         data['form-INITIAL_FORMS'] = 4
-        data.update(dict(
-            ('form-%d-id' % i, user.pk)
+        data.update({
+            'form-%d-id' % i: user.pk
             for i, user in enumerate(User.objects.all())
-        ))
+        })
         formset = self.NormalFormset(data, queryset=User.objects.all())
         self.assertTrue(formset.is_valid())
         self.assertEqual(len(formset.save()), 0)
@@ -455,10 +460,10 @@ class FormfieldShouldDeleteFormTests(TestCase):
         # create data dict with all fields marked for deletion
         data = dict(self.data)
         data['form-INITIAL_FORMS'] = 4
-        data.update(dict(
-            ('form-%d-id' % i, user.pk)
+        data.update({
+            'form-%d-id' % i: user.pk
             for i, user in enumerate(User.objects.all())
-        ))
+        })
         data.update(self.delete_all_ids)
         formset = self.NormalFormset(data, queryset=User.objects.all())
         self.assertTrue(formset.is_valid())
@@ -474,10 +479,10 @@ class FormfieldShouldDeleteFormTests(TestCase):
         # create data dict with all fields marked for deletion
         data = dict(self.data)
         data['form-INITIAL_FORMS'] = 4
-        data.update(dict(
-            ('form-%d-id' % i, user.pk)
+        data.update({
+            'form-%d-id' % i: user.pk
             for i, user in enumerate(User.objects.all())
-        ))
+        })
         data.update(self.delete_all_ids)
         formset = self.DeleteFormset(data, queryset=User.objects.all())
 

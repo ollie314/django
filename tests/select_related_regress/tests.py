@@ -3,9 +3,11 @@ from __future__ import unicode_literals
 from django.test import TestCase
 from django.utils import six
 
-from .models import (Building, Child, Device, Port, Item, Country, Connection,
-    ClientStatus, State, Client, SpecialClient, TUser, Person, Student,
-    Organizer, Class, Enrollment, Hen, Chick, A, B, C)
+from .models import (
+    A, B, C, Building, Chick, Child, Class, Client, ClientStatus, Connection,
+    Country, Device, Enrollment, Hen, Item, Organizer, Person, Port,
+    SpecialClient, State, Student, TUser,
+)
 
 
 class SelectRelatedRegressTests(TestCase):
@@ -37,7 +39,12 @@ class SelectRelatedRegressTests(TestCase):
         self.assertEqual([(c.id, six.text_type(c.start), six.text_type(c.end)) for c in connections],
             [(c1.id, 'router/4', 'switch/7'), (c2.id, 'switch/7', 'server/1')])
 
-        connections = Connection.objects.filter(start__device__building=b, end__device__building=b).select_related().order_by('id')
+        connections = (
+            Connection.objects
+            .filter(start__device__building=b, end__device__building=b)
+            .select_related()
+            .order_by('id')
+        )
         self.assertEqual([(c.id, six.text_type(c.start), six.text_type(c.end)) for c in connections],
             [(c1.id, 'router/4', 'switch/7'), (c2.id, 'switch/7', 'server/1')])
 

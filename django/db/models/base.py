@@ -2,32 +2,40 @@ from __future__ import unicode_literals
 
 import copy
 import inspect
-import sys
 import warnings
+from itertools import chain
 
 from django.apps import apps
-from django.apps.config import MODELS_MODULE_NAME
 from django.conf import settings
 from django.core import checks
-from django.core.exceptions import (ObjectDoesNotExist,
-    MultipleObjectsReturned, FieldError, ValidationError, NON_FIELD_ERRORS)
-from django.db import (router, connections, transaction, DatabaseError,
-    DEFAULT_DB_ALIAS, DJANGO_VERSION_PICKLE_KEY)
-from django.db.models.deletion import Collector
-from django.db.models.fields import AutoField, FieldDoesNotExist
-from django.db.models.fields.related import (ForeignObjectRel, ManyToOneRel,
-    OneToOneField, add_lazy_relation)
+from django.core.exceptions import (
+    NON_FIELD_ERRORS, FieldDoesNotExist, FieldError, MultipleObjectsReturned,
+    ObjectDoesNotExist, ValidationError,
+)
+from django.db import (
+    DEFAULT_DB_ALIAS, DJANGO_VERSION_PICKLE_KEY, DatabaseError, connections,
+    router, transaction,
+)
+from django.db.models import signals
+from django.db.models.constants import LOOKUP_SEP
+from django.db.models.deletion import CASCADE, Collector
+from django.db.models.fields import AutoField
+from django.db.models.fields.related import (
+    ForeignObjectRel, ManyToOneRel, OneToOneField, lazy_related_operation,
+    resolve_relation,
+)
 from django.db.models.manager import ensure_default_manager
 from django.db.models.options import Options
 from django.db.models.query import Q
-from django.db.models.query_utils import DeferredAttribute, deferred_class_factory
-from django.db.models import signals
+from django.db.models.query_utils import (
+    DeferredAttribute, deferred_class_factory,
+)
+from django.db.models.utils import make_model_tuple
 from django.utils import six
-from django.utils.deprecation import RemovedInDjango19Warning
 from django.utils.encoding import force_str, force_text
 from django.utils.functional import curry
 from django.utils.six.moves import zip
-from django.utils.text import get_text_list, capfirst
+from django.utils.text import capfirst, get_text_list
 from django.utils.translation import ugettext_lazy as _
 from django.utils.version import get_version
 
@@ -80,48 +88,24 @@ class ModelBase(type):
             meta = attr_meta
         base_meta = getattr(new_class, '_meta', None)
 
+        app_label = None
+
         # Look for an application configuration to attach the model to.
         app_config = apps.get_containing_app_config(module)
 
         if getattr(meta, 'app_label', None) is None:
-
             if app_config is None:
-                # If the model is imported before the configuration for its
-                # application is created (#21719), or isn't in an installed
-                # application (#21680), use the legacy logic to figure out the
-                # app_label by looking one level up from the package or module
-                # named 'models'. If no such package or module exists, fall
-                # back to looking one level up from the module this model is
-                # defined in.
-
-                # For 'django.contrib.sites.models', this would be 'sites'.
-                # For 'geo.models.places' this would be 'geo'.
-
-                msg = (
-                    "Model class %s.%s doesn't declare an explicit app_label "
-                    "and either isn't in an application in INSTALLED_APPS or "
-                    "else was imported before its application was loaded. "
-                    "This will no longer be supported in Django 1.9." %
-                    (module, name))
                 if not abstract:
-                    warnings.warn(msg, RemovedInDjango19Warning, stacklevel=2)
-
-                model_module = sys.modules[new_class.__module__]
-                package_components = model_module.__name__.split('.')
-                package_components.reverse()  # find the last occurrence of 'models'
-                try:
-                    app_label_index = package_components.index(MODELS_MODULE_NAME) + 1
-                except ValueError:
-                    app_label_index = 1
-                kwargs = {"app_label": package_components[app_label_index]}
+                    raise RuntimeError(
+                        "Model class %s.%s doesn't declare an explicit "
+                        "app_label and isn't in an application in "
+                        "INSTALLED_APPS." % (module, name)
+                    )
 
             else:
-                kwargs = {"app_label": app_config.label}
+                app_label = app_config.label
 
-        else:
-            kwargs = {}
-
-        new_class.add_to_class('_meta', Options(meta, **kwargs))
+        new_class.add_to_class('_meta', Options(meta, app_label))
         if not abstract:
             new_class.add_to_class(
                 'DoesNotExist',
@@ -174,12 +158,12 @@ class ModelBase(type):
             new_class.add_to_class(obj_name, obj)
 
         # All the fields of any type declared on this model
-        new_fields = (
-            new_class._meta.local_fields +
-            new_class._meta.local_many_to_many +
+        new_fields = chain(
+            new_class._meta.local_fields,
+            new_class._meta.local_many_to_many,
             new_class._meta.virtual_fields
         )
-        field_names = set(f.name for f in new_fields)
+        field_names = {f.name for f in new_fields}
 
         # Basic setup for proxy models.
         if is_proxy:
@@ -216,8 +200,8 @@ class ModelBase(type):
             # Locate OneToOneField instances.
             for field in base._meta.local_fields:
                 if isinstance(field, OneToOneField):
-                    parent_links[field.rel.to] = field
-
+                    related = resolve_relation(new_class, field.remote_field.model)
+                    parent_links[make_model_tuple(related)] = field
         # Do the appropriate setup for any model parents.
         for base in parents:
             original_base = base
@@ -240,12 +224,18 @@ class ModelBase(type):
             if not base._meta.abstract:
                 # Concrete classes...
                 base = base._meta.concrete_model
-                if base in parent_links:
-                    field = parent_links[base]
+                base_key = make_model_tuple(base)
+                if base_key in parent_links:
+                    field = parent_links[base_key]
                 elif not is_proxy:
                     attr_name = '%s_ptr' % base._meta.model_name
-                    field = OneToOneField(base, name=attr_name,
-                            auto_created=True, parent_link=True)
+                    field = OneToOneField(
+                        base,
+                        on_delete=CASCADE,
+                        name=attr_name,
+                        auto_created=True,
+                        parent_link=True,
+                    )
                     # Only add the ptr field if it's not already present;
                     # e.g. migrations will already have it specified
                     if not hasattr(new_class, attr_name):
@@ -256,7 +246,8 @@ class ModelBase(type):
             else:
                 # .. and abstract ones.
                 for field in parent_fields:
-                    new_class.add_to_class(field.name, copy.deepcopy(field))
+                    new_field = copy.deepcopy(field)
+                    new_class.add_to_class(field.name, new_field)
 
                 # Pass any non-abstract parent classes onto child.
                 new_class._meta.parents.update(base._meta.parents)
@@ -319,33 +310,21 @@ class ModelBase(type):
             cls.get_next_in_order = curry(cls._get_next_or_previous_in_order, is_next=True)
             cls.get_previous_in_order = curry(cls._get_next_or_previous_in_order, is_next=False)
 
-            # defer creating accessors on the foreign class until we are
-            # certain it has been created
-            def make_foreign_order_accessors(field, model, cls):
-                setattr(
-                    field.rel.to,
-                    'get_%s_order' % cls.__name__.lower(),
-                    curry(method_get_order, cls)
-                )
-                setattr(
-                    field.rel.to,
-                    'set_%s_order' % cls.__name__.lower(),
-                    curry(method_set_order, cls)
-                )
-            add_lazy_relation(
-                cls,
-                opts.order_with_respect_to,
-                opts.order_with_respect_to.rel.to,
-                make_foreign_order_accessors
-            )
+            # Defer creating accessors on the foreign class until it has been
+            # created and registered. If remote_field is None, we're ordering
+            # with respect to a GenericForeignKey and don't know what the
+            # foreign class is - we'll add those accessors later in
+            # contribute_to_class().
+            if opts.order_with_respect_to.remote_field:
+                wrt = opts.order_with_respect_to
+                remote = wrt.remote_field.model
+                lazy_related_operation(make_foreign_order_accessors, cls, remote)
 
         # Give the class a docstring -- its definition.
         if cls.__doc__ is None:
-            cls.__doc__ = "%s(%s)" % (cls.__name__, ", ".join(f.attname for f in opts.fields))
+            cls.__doc__ = "%s(%s)" % (cls.__name__, ", ".join(f.name for f in opts.fields))
 
-        get_absolute_url_override = settings.ABSOLUTE_URL_OVERRIDES.get(
-            '%s.%s' % (opts.app_label, opts.model_name)
-        )
+        get_absolute_url_override = settings.ABSOLUTE_URL_OVERRIDES.get(opts.label_lower)
         if get_absolute_url_override:
             setattr(cls, 'get_absolute_url', get_absolute_url_override)
 
@@ -398,7 +377,7 @@ class Model(six.with_metaclass(ModelBase)):
                 setattr(self, field.attname, val)
                 kwargs.pop(field.name, None)
                 # Maintain compatibility with existing calls.
-                if isinstance(field.rel, ManyToOneRel):
+                if isinstance(field.remote_field, ManyToOneRel):
                     kwargs.pop(field.attname, None)
 
         # Now we're left with the unprocessed fields that *must* come from
@@ -415,7 +394,7 @@ class Model(six.with_metaclass(ModelBase)):
                 # This field will be populated on request.
                 continue
             if kwargs:
-                if isinstance(field.rel, ForeignObjectRel):
+                if isinstance(field.remote_field, ForeignObjectRel):
                     try:
                         # Assume object instance was passed in.
                         rel_obj = kwargs.pop(field.name)
@@ -456,7 +435,8 @@ class Model(six.with_metaclass(ModelBase)):
             for prop in list(kwargs):
                 try:
                     if isinstance(getattr(self.__class__, prop), property):
-                        setattr(self, prop, kwargs.pop(prop))
+                        setattr(self, prop, kwargs[prop])
+                        del kwargs[prop]
                 except AttributeError:
                     pass
             if kwargs:
@@ -484,7 +464,7 @@ class Model(six.with_metaclass(ModelBase)):
     def __str__(self):
         if six.PY2 and hasattr(self, '__unicode__'):
             return force_text(self).encode('utf-8')
-        return '%s object' % self.__class__.__name__
+        return str('%s object' % self.__class__.__name__)
 
     def __eq__(self, other):
         if not isinstance(other, Model):
@@ -552,6 +532,71 @@ class Model(six.with_metaclass(ModelBase)):
 
     pk = property(_get_pk_val, _set_pk_val)
 
+    def get_deferred_fields(self):
+        """
+        Returns a set containing names of deferred fields for this instance.
+        """
+        return {
+            f.attname for f in self._meta.concrete_fields
+            if isinstance(self.__class__.__dict__.get(f.attname), DeferredAttribute)
+        }
+
+    def refresh_from_db(self, using=None, fields=None, **kwargs):
+        """
+        Reloads field values from the database.
+
+        By default, the reloading happens from the database this instance was
+        loaded from, or by the read router if this instance wasn't loaded from
+        any database. The using parameter will override the default.
+
+        Fields can be used to specify which fields to reload. The fields
+        should be an iterable of field attnames. If fields is None, then
+        all non-deferred fields are reloaded.
+
+        When accessing deferred fields of an instance, the deferred loading
+        of the field will call this method.
+        """
+        if fields is not None:
+            if len(fields) == 0:
+                return
+            if any(LOOKUP_SEP in f for f in fields):
+                raise ValueError(
+                    'Found "%s" in fields argument. Relations and transforms '
+                    'are not allowed in fields.' % LOOKUP_SEP)
+
+        db = using if using is not None else self._state.db
+        if self._deferred:
+            non_deferred_model = self._meta.proxy_for_model
+        else:
+            non_deferred_model = self.__class__
+        db_instance_qs = non_deferred_model._default_manager.using(db).filter(pk=self.pk)
+
+        # Use provided fields, if not set then reload all non-deferred fields.
+        if fields is not None:
+            fields = list(fields)
+            db_instance_qs = db_instance_qs.only(*fields)
+        elif self._deferred:
+            deferred_fields = self.get_deferred_fields()
+            fields = [f.attname for f in self._meta.concrete_fields
+                      if f.attname not in deferred_fields]
+            db_instance_qs = db_instance_qs.only(*fields)
+
+        db_instance = db_instance_qs.get()
+        non_loaded_fields = db_instance.get_deferred_fields()
+        for field in self._meta.concrete_fields:
+            if field.attname in non_loaded_fields:
+                # This field wasn't refreshed - skip ahead.
+                continue
+            setattr(self, field.attname, getattr(db_instance, field.attname))
+            # Throw away stale foreign key references.
+            if field.is_relation and field.get_cache_name() in self.__dict__:
+                rel_instance = getattr(self, field.get_cache_name())
+                local_val = getattr(db_instance, field.attname)
+                related_val = None if rel_instance is None else getattr(rel_instance, field.target_field.attname)
+                if local_val != related_val or (local_val is None and related_val is None):
+                    del self.__dict__[field.get_cache_name()]
+        self._state.db = db_instance._state.db
+
     def serializable_value(self, field_name):
         """
         Returns the value of the field name for this instance. If the field is
@@ -564,7 +609,7 @@ class Model(six.with_metaclass(ModelBase)):
         and not use this method.
         """
         try:
-            field = self._meta.get_field_by_name(field_name)[0]
+            field = self._meta.get_field(field_name)
         except FieldDoesNotExist:
             return getattr(self, field_name)
         return getattr(self, field.attname)
@@ -579,6 +624,33 @@ class Model(six.with_metaclass(ModelBase)):
         that the "save" must be an SQL insert or update (or equivalent for
         non-SQL backends), respectively. Normally, they should not be set.
         """
+        # Ensure that a model instance without a PK hasn't been assigned to
+        # a ForeignKey or OneToOneField on this model. If the field is
+        # nullable, allowing the save() would result in silent data loss.
+        for field in self._meta.concrete_fields:
+            if field.is_relation:
+                # If the related field isn't cached, then an instance hasn't
+                # been assigned and there's no need to worry about this check.
+                try:
+                    getattr(self, field.get_cache_name())
+                except AttributeError:
+                    continue
+                obj = getattr(self, field.name, None)
+                # A pk may have been assigned manually to a model instance not
+                # saved to the database (or auto-generated in a case like
+                # UUIDField), but we allow the save to proceed and rely on the
+                # database to raise an IntegrityError if applicable. If
+                # constraints aren't supported by the database, there's the
+                # unavoidable risk of data corruption.
+                if obj and obj.pk is None:
+                    # Remove the object from a related instance cache.
+                    if not field.remote_field.multiple:
+                        delattr(obj, field.remote_field.get_cache_name())
+                    raise ValueError(
+                        "save() prohibited to prevent data loss due to "
+                        "unsaved related object '%s'." % field.name
+                    )
+
         using = using or router.db_for_write(self.__class__, instance=self)
         if force_insert and (force_update or update_fields):
             raise ValueError("Cannot force both insert and updating in model saving.")
@@ -704,6 +776,9 @@ class Model(six.with_metaclass(ModelBase)):
                        if f.name in update_fields or f.attname in update_fields]
 
         pk_val = self._get_pk_val(meta)
+        if pk_val is None:
+            pk_val = meta.pk.get_pk_value_on_save(self)
+            setattr(self, meta.pk.attname, pk_val)
         pk_set = pk_val is not None
         if not pk_set and (force_update or update_fields):
             raise ValueError("Cannot force an update in save() with no primary key.")
@@ -725,8 +800,8 @@ class Model(six.with_metaclass(ModelBase)):
                 # If this is a model with an order_with_respect_to
                 # autopopulate the _order field
                 field = meta.order_with_respect_to
-                order_value = cls._base_manager.using(using).filter(
-                    **{field.name: getattr(self, field.attname)}).count()
+                filter_args = field.get_filter_kwargs_for_object(self)
+                order_value = cls._base_manager.using(using).filter(**filter_args).count()
                 self._order = order_value
 
             fields = meta.local_concrete_fields
@@ -775,7 +850,7 @@ class Model(six.with_metaclass(ModelBase)):
         return manager._insert([self], fields=fields, return_id=update_pk,
                                using=using, raw=raw)
 
-    def delete(self, using=None):
+    def delete(self, using=None, keep_parents=False):
         using = using or router.db_for_write(self.__class__, instance=self)
         assert self._get_pk_val() is not None, (
             "%s object can't be deleted because its %s attribute is set to None." %
@@ -783,8 +858,8 @@ class Model(six.with_metaclass(ModelBase)):
         )
 
         collector = Collector(using=using)
-        collector.collect([self])
-        collector.delete()
+        collector.collect([self], keep_parents=keep_parents)
+        return collector.delete()
 
     delete.alters_data = True
 
@@ -814,9 +889,8 @@ class Model(six.with_metaclass(ModelBase)):
             op = 'gt' if is_next else 'lt'
             order = '_order' if is_next else '-_order'
             order_field = self._meta.order_with_respect_to
-            obj = self._default_manager.filter(**{
-                order_field.name: getattr(self, order_field.attname)
-            }).filter(**{
+            filter_args = order_field.get_filter_kwargs_for_object(self)
+            obj = self._default_manager.filter(**filter_args).filter(**{
                 '_order__%s' % op: self._default_manager.values('_order').filter(**{
                     self._meta.pk.name: self.pk
                 })
@@ -827,7 +901,7 @@ class Model(six.with_metaclass(ModelBase)):
     def prepare_database_save(self, field):
         if self.pk is None:
             raise ValueError("Unsaved model instance %r cannot be used in an ORM query." % self)
-        return getattr(self, field.rel.field_name)
+        return getattr(self, field.remote_field.get_related_field().attname)
 
     def clean(self):
         """
@@ -868,7 +942,7 @@ class Model(six.with_metaclass(ModelBase)):
         unique_checks = []
 
         unique_togethers = [(self.__class__, self._meta.unique_together)]
-        for parent_class in self._meta.parents.keys():
+        for parent_class in self._meta.get_parent_list():
             if parent_class._meta.unique_together:
                 unique_togethers.append((parent_class, parent_class._meta.unique_together))
 
@@ -888,7 +962,7 @@ class Model(six.with_metaclass(ModelBase)):
         # the list of checks.
 
         fields_with_class = [(self.__class__, self._meta.local_fields)]
-        for parent_class in self._meta.parents.keys():
+        for parent_class in self._meta.get_parent_list():
             fields_with_class.append((parent_class, parent_class._meta.local_fields))
 
         for model_class, fields in fields_with_class:
@@ -1120,8 +1194,6 @@ class Model(six.with_metaclass(ModelBase)):
                 errors.append(
                     checks.Error(
                         "'%s' is not of the form 'app_label.app_name'." % cls._meta.swappable,
-                        hint=None,
-                        obj=None,
                         id='models.E001',
                     )
                 )
@@ -1129,11 +1201,10 @@ class Model(six.with_metaclass(ModelBase)):
                 app_label, model_name = cls._meta.swapped.split('.')
                 errors.append(
                     checks.Error(
-                        ("'%s' references '%s.%s', which has not been installed, or is abstract.") % (
+                        "'%s' references '%s.%s', which has not been "
+                        "installed, or is abstract." % (
                             cls._meta.swappable, app_label, model_name
                         ),
-                        hint=None,
-                        obj=None,
                         id='models.E002',
                     )
                 )
@@ -1147,8 +1218,6 @@ class Model(six.with_metaclass(ModelBase)):
                 errors.append(
                     checks.Error(
                         "Proxy model '%s' contains model fields." % cls.__name__,
-                        hint=None,
-                        obj=None,
                         id='models.E017',
                     )
                 )
@@ -1159,8 +1228,7 @@ class Model(six.with_metaclass(ModelBase)):
         """ Perform all manager checks. """
 
         errors = []
-        managers = cls._meta.concrete_managers + cls._meta.abstract_managers
-        for __, __, manager in managers:
+        for __, manager, __ in cls._meta.managers:
             errors.extend(manager.check(**kwargs))
         return errors
 
@@ -1186,22 +1254,18 @@ class Model(six.with_metaclass(ModelBase)):
         fields = cls._meta.local_many_to_many
 
         # Skip when the target model wasn't found.
-        fields = (f for f in fields if isinstance(f.rel.to, ModelBase))
+        fields = (f for f in fields if isinstance(f.remote_field.model, ModelBase))
 
         # Skip when the relationship model wasn't found.
-        fields = (f for f in fields if isinstance(f.rel.through, ModelBase))
+        fields = (f for f in fields if isinstance(f.remote_field.through, ModelBase))
 
         for f in fields:
-            signature = (f.rel.to, cls, f.rel.through)
+            signature = (f.remote_field.model, cls, f.remote_field.through)
             if signature in seen_intermediary_signatures:
                 errors.append(
                     checks.Error(
-                        ("The model has two many-to-many relations through "
-                         "the intermediate model '%s.%s'.") % (
-                            f.rel.through._meta.app_label,
-                            f.rel.through._meta.object_name
-                        ),
-                        hint=None,
+                        "The model has two many-to-many relations through "
+                        "the intermediate model '%s'." % f.remote_field.through._meta.label,
                         obj=cls,
                         id='models.E003',
                     )
@@ -1220,9 +1284,8 @@ class Model(six.with_metaclass(ModelBase)):
         if fields and not fields[0].primary_key and cls._meta.pk.name == 'id':
             return [
                 checks.Error(
-                    ("'id' can only be used as a field name if the field also "
-                     "sets 'primary_key=True'."),
-                    hint=None,
+                    "'id' can only be used as a field name if the field also "
+                    "sets 'primary_key=True'.",
                     obj=cls,
                     id='models.E004',
                 )
@@ -1238,19 +1301,18 @@ class Model(six.with_metaclass(ModelBase)):
         used_fields = {}  # name or attname -> field
 
         # Check that multi-inheritance doesn't cause field name shadowing.
-        for parent in cls._meta.parents:
+        for parent in cls._meta.get_parent_list():
             for f in parent._meta.local_fields:
                 clash = used_fields.get(f.name) or used_fields.get(f.attname) or None
                 if clash:
                     errors.append(
                         checks.Error(
-                            ("The field '%s' from parent model "
-                             "'%s' clashes with the field '%s' "
-                             "from parent model '%s'.") % (
+                            "The field '%s' from parent model "
+                            "'%s' clashes with the field '%s' "
+                            "from parent model '%s'." % (
                                 clash.name, clash.model._meta,
                                 f.name, f.model._meta
                             ),
-                            hint=None,
                             obj=cls,
                             id='models.E005',
                         )
@@ -1259,7 +1321,13 @@ class Model(six.with_metaclass(ModelBase)):
                 used_fields[f.attname] = f
 
         # Check that fields defined in the model don't clash with fields from
-        # parents.
+        # parents, including auto-generated fields like multi-table inheritance
+        # child accessors.
+        for parent in cls._meta.get_parent_list():
+            for f in parent._meta.get_fields():
+                if f not in used_fields:
+                    used_fields[f.name] = f
+
         for f in cls._meta.local_fields:
             clash = used_fields.get(f.name) or used_fields.get(f.attname) or None
             # Note that we may detect clash between user-defined non-unique
@@ -1271,11 +1339,10 @@ class Model(six.with_metaclass(ModelBase)):
             if clash and not id_conflict:
                 errors.append(
                     checks.Error(
-                        ("The field '%s' clashes with the field '%s' "
-                         "from model '%s'.") % (
+                        "The field '%s' clashes with the field '%s' "
+                        "from model '%s'." % (
                             f.name, clash.name, clash.model._meta
                         ),
-                        hint=None,
                         obj=f,
                         id='models.E006',
                     )
@@ -1298,7 +1365,8 @@ class Model(six.with_metaclass(ModelBase)):
             if column_name and column_name in used_column_names:
                 errors.append(
                     checks.Error(
-                        "Field '%s' has column name '%s' that is used by another field." % (f.name, column_name),
+                        "Field '%s' has column name '%s' that is used by "
+                        "another field." % (f.name, column_name),
                         hint="Specify a 'db_column' for the field.",
                         obj=cls,
                         id='models.E007'
@@ -1316,7 +1384,6 @@ class Model(six.with_metaclass(ModelBase)):
             return [
                 checks.Error(
                     "'index_together' must be a list or tuple.",
-                    hint=None,
                     obj=cls,
                     id='models.E008',
                 )
@@ -1327,7 +1394,6 @@ class Model(six.with_metaclass(ModelBase)):
             return [
                 checks.Error(
                     "All 'index_together' elements must be lists or tuples.",
-                    hint=None,
                     obj=cls,
                     id='models.E009',
                 )
@@ -1346,7 +1412,6 @@ class Model(six.with_metaclass(ModelBase)):
             return [
                 checks.Error(
                     "'unique_together' must be a list or tuple.",
-                    hint=None,
                     obj=cls,
                     id='models.E010',
                 )
@@ -1357,7 +1422,6 @@ class Model(six.with_metaclass(ModelBase)):
             return [
                 checks.Error(
                     "All 'unique_together' elements must be lists or tuples.",
-                    hint=None,
                     obj=cls,
                     id='models.E011',
                 )
@@ -1373,29 +1437,34 @@ class Model(six.with_metaclass(ModelBase)):
     def _check_local_fields(cls, fields, option):
         from django.db import models
 
+        # In order to avoid hitting the relation tree prematurely, we use our
+        # own fields_map instead of using get_field()
+        forward_fields_map = {
+            field.name: field for field in cls._meta._get_fields(reverse=False)
+        }
+
         errors = []
         for field_name in fields:
             try:
-                field = cls._meta.get_field(field_name,
-                    many_to_many=True)
-            except models.FieldDoesNotExist:
+                field = forward_fields_map[field_name]
+            except KeyError:
                 errors.append(
                     checks.Error(
-                        "'%s' refers to the non-existent field '%s'." % (option, field_name),
-                        hint=None,
+                        "'%s' refers to the non-existent field '%s'." % (
+                            option, field_name,
+                        ),
                         obj=cls,
                         id='models.E012',
                     )
                 )
             else:
-                if isinstance(field.rel, models.ManyToManyRel):
+                if isinstance(field.remote_field, models.ManyToManyRel):
                     errors.append(
                         checks.Error(
-                            ("'%s' refers to a ManyToManyField '%s', but "
-                             "ManyToManyFields are not permitted in '%s'.") % (
-                                option, field_name, option
+                            "'%s' refers to a ManyToManyField '%s', but "
+                            "ManyToManyFields are not permitted in '%s'." % (
+                                option, field_name, option,
                             ),
-                            hint=None,
                             obj=cls,
                             id='models.E013',
                         )
@@ -1403,12 +1472,9 @@ class Model(six.with_metaclass(ModelBase)):
                 elif field not in cls._meta.local_fields:
                     errors.append(
                         checks.Error(
-                            ("'%s' refers to field '%s' which is not local "
-                             "to model '%s'.") % (
-                                option, field_name, cls._meta.object_name
-                            ),
-                            hint=("This issue may be caused by multi-table "
-                                  "inheritance."),
+                            "'%s' refers to field '%s' which is not local to model '%s'."
+                            % (option, field_name, cls._meta.object_name),
+                            hint="This issue may be caused by multi-table inheritance.",
                             obj=cls,
                             id='models.E016',
                         )
@@ -1419,25 +1485,28 @@ class Model(six.with_metaclass(ModelBase)):
     def _check_ordering(cls):
         """ Check "ordering" option -- is it a list of strings and do all fields
         exist? """
+        if cls._meta._ordering_clash:
+            return [
+                checks.Error(
+                    "'ordering' and 'order_with_respect_to' cannot be used together.",
+                    obj=cls,
+                    id='models.E021',
+                ),
+            ]
 
-        from django.db.models import FieldDoesNotExist
-
-        if not cls._meta.ordering:
+        if cls._meta.order_with_respect_to or not cls._meta.ordering:
             return []
 
         if not isinstance(cls._meta.ordering, (list, tuple)):
             return [
                 checks.Error(
-                    ("'ordering' must be a tuple or list "
-                     "(even if you want to order by only one field)."),
-                    hint=None,
+                    "'ordering' must be a tuple or list (even if you want to order by only one field).",
                     obj=cls,
                     id='models.E014',
                 )
             ]
 
         errors = []
-
         fields = cls._meta.ordering
 
         # Skip '?' fields.
@@ -1446,37 +1515,35 @@ class Model(six.with_metaclass(ModelBase)):
         # Convert "-field" to "field".
         fields = ((f[1:] if f.startswith('-') else f) for f in fields)
 
-        fields = (f for f in fields if
-            f != '_order' or not cls._meta.order_with_respect_to)
-
         # Skip ordering in the format field1__field2 (FIXME: checking
         # this format would be nice, but it's a little fiddly).
         fields = (f for f in fields if '__' not in f)
 
         # Skip ordering on pk. This is always a valid order_by field
         # but is an alias and therefore won't be found by opts.get_field.
-        fields = (f for f in fields if f != 'pk')
+        fields = {f for f in fields if f != 'pk'}
 
-        for field_name in fields:
-            try:
-                cls._meta.get_field(field_name, many_to_many=False)
-            except FieldDoesNotExist:
-                if field_name.endswith('_id'):
-                    try:
-                        field = cls._meta.get_field(field_name[:-3], many_to_many=False)
-                    except FieldDoesNotExist:
-                        pass
-                    else:
-                        if field.attname == field_name:
-                            continue
-                errors.append(
-                    checks.Error(
-                        "'ordering' refers to the non-existent field '%s'." % field_name,
-                        hint=None,
-                        obj=cls,
-                        id='models.E015',
-                    )
+        # Check for invalid or non-existent fields in ordering.
+        invalid_fields = []
+
+        # Any field name that is not present in field_names does not exist.
+        # Also, ordering by m2m fields is not allowed.
+        opts = cls._meta
+        valid_fields = set(chain.from_iterable(
+            (f.name, f.attname) if not (f.auto_created and not f.concrete) else (f.field.related_query_name(),)
+            for f in chain(opts.fields, opts.related_objects)
+        ))
+
+        invalid_fields.extend(fields - valid_fields)
+
+        for invalid_field in invalid_fields:
+            errors.append(
+                checks.Error(
+                    "'ordering' refers to the non-existent field '%s'." % invalid_field,
+                    obj=cls,
+                    id='models.E015',
                 )
+            )
         return errors
 
     @classmethod
@@ -1492,7 +1559,7 @@ class Model(six.with_metaclass(ModelBase)):
         # Find the minimum max allowed length among all specified db_aliases.
         for db in settings.DATABASES.keys():
             # skip databases where the model won't be created
-            if not router.allow_migrate(db, cls):
+            if not router.allow_migrate_model(db, cls):
                 continue
             connection = connections[db]
             max_name_length = connection.ops.max_name_length()
@@ -1530,7 +1597,7 @@ class Model(six.with_metaclass(ModelBase)):
         for f in cls._meta.local_many_to_many:
             # Check if auto-generated name for the M2M field is too long
             # for the database.
-            for m2m in f.rel.through._meta.local_fields:
+            for m2m in f.remote_field.through._meta.local_fields:
                 _, rel_name = m2m.get_attname_column()
                 if (m2m.db_column is None and rel_name is not None
                         and len(rel_name) > allowed_len):
@@ -1539,9 +1606,10 @@ class Model(six.with_metaclass(ModelBase)):
                             'Autogenerated column name too long for M2M field '
                             '"%s". Maximum length is "%s" for database "%s".'
                             % (rel_name, allowed_len, db_alias),
-                            hint=("Use 'through' to create a separate model "
-                                "for M2M and then set column_name using "
-                                "'db_column'."),
+                            hint=(
+                                "Use 'through' to create a separate model for "
+                                "M2M and then set column_name using 'db_column'."
+                            ),
                             obj=cls,
                             id='models.E019',
                         )
@@ -1559,22 +1627,33 @@ class Model(six.with_metaclass(ModelBase)):
 def method_set_order(ordered_obj, self, id_list, using=None):
     if using is None:
         using = DEFAULT_DB_ALIAS
-    rel_val = getattr(self, ordered_obj._meta.order_with_respect_to.rel.field_name)
-    order_name = ordered_obj._meta.order_with_respect_to.name
+    order_wrt = ordered_obj._meta.order_with_respect_to
+    filter_args = order_wrt.get_forward_related_filter(self)
     # FIXME: It would be nice if there was an "update many" version of update
     # for situations like this.
     with transaction.atomic(using=using, savepoint=False):
         for i, j in enumerate(id_list):
-            ordered_obj.objects.filter(**{'pk': j, order_name: rel_val}).update(_order=i)
+            ordered_obj.objects.filter(pk=j, **filter_args).update(_order=i)
 
 
 def method_get_order(ordered_obj, self):
-    rel_val = getattr(self, ordered_obj._meta.order_with_respect_to.rel.field_name)
-    order_name = ordered_obj._meta.order_with_respect_to.name
+    order_wrt = ordered_obj._meta.order_with_respect_to
+    filter_args = order_wrt.get_forward_related_filter(self)
     pk_name = ordered_obj._meta.pk.name
-    return [r[pk_name] for r in
-            ordered_obj.objects.filter(**{order_name: rel_val}).values(pk_name)]
+    return ordered_obj.objects.filter(**filter_args).values_list(pk_name, flat=True)
 
+
+def make_foreign_order_accessors(model, related_model):
+    setattr(
+        related_model,
+        'get_%s_order' % model.__name__.lower(),
+        curry(method_get_order, model)
+    )
+    setattr(
+        related_model,
+        'set_%s_order' % model.__name__.lower(),
+        curry(method_set_order, model)
+    )
 
 ########
 # MISC #

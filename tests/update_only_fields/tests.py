@@ -1,9 +1,9 @@
 from __future__ import unicode_literals
 
-from django.db.models.signals import pre_save, post_save
+from django.db.models.signals import post_save, pre_save
 from django.test import TestCase
 
-from .models import Person, Employee, ProxyEmployee, Profile, Account
+from .models import Account, Employee, Person, Profile, ProxyEmployee
 
 
 class UpdateOnlyFieldsTests(TestCase):
@@ -124,11 +124,9 @@ class UpdateOnlyFieldsTests(TestCase):
         profile_boss = Profile.objects.create(name='Boss', salary=3000)
         e1 = Employee.objects.create(name='Sara', gender='F',
             employee_num=1, profile=profile_boss)
-
         a1 = Account.objects.create(num=1)
         a2 = Account.objects.create(num=2)
-
-        e1.accounts = [a1, a2]
+        e1.accounts.set([a1, a2])
 
         with self.assertRaises(ValueError):
             e1.save(update_fields=['accounts'])

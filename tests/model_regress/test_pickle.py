@@ -1,10 +1,8 @@
 import pickle
-import warnings
 
-from django.db import models, DJANGO_VERSION_PICKLE_KEY
+from django.db import DJANGO_VERSION_PICKLE_KEY, models
 from django.test import TestCase
-from django.utils.encoding import force_text
-from django.utils.version import get_major_version, get_version
+from django.utils.version import get_version
 
 
 class ModelPickleTestCase(TestCase):
@@ -23,11 +21,9 @@ class ModelPickleTestCase(TestCase):
                 return reduce_list
 
         p = MissingDjangoVersion(title="FooBar")
-        with warnings.catch_warnings(record=True) as recorded:
+        msg = "Pickled model instance's Django version is not specified."
+        with self.assertRaisesMessage(RuntimeWarning, msg):
             pickle.loads(pickle.dumps(p))
-            msg = force_text(recorded.pop().message)
-            self.assertEqual(msg,
-                "Pickled model instance's Django version is not specified.")
 
     def test_unsupported_unpickle(self):
         """
@@ -40,14 +36,10 @@ class ModelPickleTestCase(TestCase):
             def __reduce__(self):
                 reduce_list = super(DifferentDjangoVersion, self).__reduce__()
                 data = reduce_list[-1]
-                data[DJANGO_VERSION_PICKLE_KEY] = str(float(get_major_version()) - 0.1)
+                data[DJANGO_VERSION_PICKLE_KEY] = '1.0'
                 return reduce_list
 
         p = DifferentDjangoVersion(title="FooBar")
-        with warnings.catch_warnings(record=True) as recorded:
+        msg = "Pickled model instance's Django version 1.0 does not match the current version %s." % get_version()
+        with self.assertRaisesMessage(RuntimeWarning, msg):
             pickle.loads(pickle.dumps(p))
-            msg = force_text(recorded.pop().message)
-            self.assertEqual(msg,
-                "Pickled model instance's Django version %s does not "
-                "match the current version %s."
-                % (str(float(get_major_version()) - 0.1), get_version()))

@@ -10,7 +10,6 @@ from django.conf import settings
 from django.utils.encoding import force_bytes
 from django.utils.timezone import utc
 
-
 logger = logging.getLogger('django.db.backends')
 
 
@@ -86,7 +85,7 @@ class CursorDebugWrapper(CursorWrapper):
                 'sql': sql,
                 'time': "%.3f" % duration,
             })
-            logger.debug('(%.3f) %s; args=%s' % (duration, sql, params),
+            logger.debug('(%.3f) %s; args=%s', duration, sql, params,
                 extra={'duration': duration, 'sql': sql, 'params': params}
             )
 
@@ -105,7 +104,7 @@ class CursorDebugWrapper(CursorWrapper):
                 'sql': '%s times: %s' % (times, sql),
                 'time': "%.3f" % duration,
             })
-            logger.debug('(%.3f) %s; args=%s' % (duration, sql, param_list),
+            logger.debug('(%.3f) %s; args=%s', duration, sql, param_list,
                 extra={'duration': duration, 'sql': sql, 'params': param_list}
             )
 
@@ -191,9 +190,18 @@ def format_number(value, max_digits, decimal_places):
     Formats a number into a string with the requisite number of digits and
     decimal places.
     """
+    if value is None:
+        return None
     if isinstance(value, decimal.Decimal):
         context = decimal.getcontext().copy()
-        context.prec = max_digits
-        return "{0:f}".format(value.quantize(decimal.Decimal(".1") ** decimal_places, context=context))
-    else:
+        if max_digits is not None:
+            context.prec = max_digits
+        if decimal_places is not None:
+            value = value.quantize(decimal.Decimal(".1") ** decimal_places, context=context)
+        else:
+            context.traps[decimal.Rounded] = 1
+            value = context.create_decimal(value)
+        return "{:f}".format(value)
+    if decimal_places is not None:
         return "%.*f" % (decimal_places, value)
+    return "{:f}".format(value)

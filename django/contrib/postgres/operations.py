@@ -12,6 +12,8 @@ class CreateExtension(Operation):
         pass
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        if schema_editor.connection.vendor != 'postgresql':
+            return
         schema_editor.execute("CREATE EXTENSION IF NOT EXISTS %s" % self.name)
 
     def database_backwards(self, app_label, schema_editor, from_state, to_state):
@@ -32,3 +34,9 @@ class HStoreExtension(CreateExtension):
         # extension is installed, a subsequent data migration would use the
         # same connection
         register_hstore_handler(schema_editor.connection)
+
+
+class UnaccentExtension(CreateExtension):
+
+    def __init__(self):
+        self.name = 'unaccent'

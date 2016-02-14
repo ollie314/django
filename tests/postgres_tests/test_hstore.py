@@ -1,18 +1,23 @@
+# -*- coding: utf-8 -*-
+from __future__ import unicode_literals
+
 import json
-import unittest
 
-from django.contrib.postgres import forms
-from django.contrib.postgres.fields import HStoreField
-from django.contrib.postgres.validators import KeysValidator
 from django.core import exceptions, serializers
-from django.db import connection
-from django.test import TestCase
+from django.forms import Form
 
+from . import PostgreSQLTestCase
 from .models import HStoreModel
 
+try:
+    from django.contrib.postgres import forms
+    from django.contrib.postgres.fields import HStoreField
+    from django.contrib.postgres.validators import KeysValidator
+except ImportError:
+    pass
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
-class SimpleTests(TestCase):
+
+class SimpleTests(PostgreSQLTestCase):
     apps = ['django.contrib.postgres']
 
     def test_save_load_success(self):
@@ -35,9 +40,22 @@ class SimpleTests(TestCase):
         reloaded = HStoreModel.objects.get()
         self.assertEqual(reloaded.field, value)
 
+    def test_key_val_cast_to_string(self):
+        value = {'a': 1, 'b': 'B', 2: 'c', 'ï': 'ê', b'x': b'test'}
+        expected_value = {'a': '1', 'b': 'B', '2': 'c', 'ï': 'ê', 'x': 'test'}
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
-class TestQuerying(TestCase):
+        instance = HStoreModel.objects.create(field=value)
+        instance = HStoreModel.objects.get()
+        self.assertDictEqual(instance.field, expected_value)
+
+        instance = HStoreModel.objects.get(field__a=1)
+        self.assertDictEqual(instance.field, expected_value)
+
+        instance = HStoreModel.objects.get(field__has_keys=[2, 'a', 'ï'])
+        self.assertDictEqual(instance.field, expected_value)
+
+
+class TestQuerying(PostgreSQLTestCase):
 
     def setUp(self):
         self.objs = [
@@ -66,6 +84,14 @@ class TestQuerying(TestCase):
             self.objs[:2]
         )
 
+    def test_in_generator(self):
+        def search():
+            yield {'a': 'b'}
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__in=search()),
+            self.objs[:1]
+        )
+
     def test_has_key(self):
         self.assertSequenceEqual(
             HStoreModel.objects.filter(field__has_key='c'),
@@ -76,6 +102,12 @@ class TestQuerying(TestCase):
         self.assertSequenceEqual(
             HStoreModel.objects.filter(field__has_keys=['a', 'c']),
             self.objs[1:2]
+        )
+
+    def test_has_any_keys(self):
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__has_any_keys=['a', 'c']),
+            self.objs[:3]
         )
 
     def test_key_transform(self):
@@ -114,9 +146,25 @@ class TestQuerying(TestCase):
             self.objs[:3]
         )
 
+    def test_key_isnull(self):
+        obj = HStoreModel.objects.create(field={'a': None})
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__a__isnull=True),
+            self.objs[2:5] + [obj]
+        )
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__a__isnull=False),
+            self.objs[:2]
+        )
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
-class TestSerialization(TestCase):
+    def test_usage_in_subquery(self):
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(id__in=HStoreModel.objects.filter(field__a='b')),
+            self.objs[:2]
+        )
+
+
+class TestSerialization(PostgreSQLTestCase):
     test_data = '[{"fields": {"field": "{\\"a\\": \\"b\\"}"}, "model": "postgres_tests.hstoremodel", "pk": null}]'
 
     def test_dumping(self):
@@ -129,7 +177,7 @@ class TestSerialization(TestCase):
         self.assertEqual(instance.field, {'a': 'b'})
 
 
-class TestValidation(TestCase):
+class TestValidation(PostgreSQLTestCase):
 
     def test_not_a_string(self):
         field = HStoreField()
@@ -139,7 +187,7 @@ class TestValidation(TestCase):
         self.assertEqual(cm.exception.message % cm.exception.params, 'The value of "a" is not a string.')
 
 
-class TestFormField(TestCase):
+class TestFormField(PostgreSQLTestCase):
 
     def test_valid(self):
         field = forms.HStoreField()
@@ -168,8 +216,29 @@ class TestFormField(TestCase):
         form_field = model_field.formfield()
         self.assertIsInstance(form_field, forms.HStoreField)
 
+    def test_field_has_changed(self):
+        class HStoreFormTest(Form):
+            f1 = forms.HStoreField()
+        form_w_hstore = HStoreFormTest()
+        self.assertFalse(form_w_hstore.has_changed())
 
-class TestValidator(TestCase):
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'})
+        self.assertTrue(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'}, initial={'f1': '{"a": 1}'})
+        self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 2}'}, initial={'f1': '{"a": 1}'})
+        self.assertTrue(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'}, initial={'f1': {"a": 1}})
+        self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 2}'}, initial={'f1': {"a": 1}})
+        self.assertTrue(form_w_hstore.has_changed())
+
+
+class TestValidator(PostgreSQLTestCase):
 
     def test_simple_valid(self):
         validator = KeysValidator(keys=['a', 'b'])

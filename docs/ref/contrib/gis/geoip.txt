@@ -1,11 +1,15 @@
-.. _ref-geoip:
-
 ======================
 Geolocation with GeoIP
 ======================
 
 .. module:: django.contrib.gis.geoip
    :synopsis: High-level Python interface for MaxMind's GeoIP C library.
+
+.. deprecated:: 1.9
+
+    This module is deprecated in favor of :doc:`django.contrib.gis.geoip2
+    </ref/contrib/gis/geoip2>`, which supports IPv6 and the GeoLite2 database
+    format.
 
 The :class:`GeoIP` object is a ctypes wrapper for the
 `MaxMind GeoIP C API`__. [#]_
@@ -18,10 +22,10 @@ datasets in binary format (the CSV files will not work!).  These datasets may be
 you set :setting:`GEOIP_PATH` with in your settings.  See the example and
 reference below for more details.
 
-__ http://www.maxmind.com/app/c
-__ http://www.maxmind.com/app/country
-__ http://www.maxmind.com/app/city
-__ http://www.maxmind.com/download/geoip/database/
+__ https://www.maxmind.com/app/c
+__ https://www.maxmind.com/app/country
+__ https://www.maxmind.com/app/city
+__ https://www.maxmind.com/download/geoip/database/
 
 Example
 =======
@@ -56,8 +60,8 @@ usage::
 
 .. setting:: GEOIP_PATH
 
-GEOIP_PATH
-----------
+``GEOIP_PATH``
+--------------
 
 A string specifying the directory where the GeoIP data files are
 located.  This setting is *required* unless manually specified
@@ -65,8 +69,8 @@ with ``path`` keyword when initializing the :class:`GeoIP` object.
 
 .. setting:: GEOIP_LIBRARY_PATH
 
-GEOIP_LIBRARY_PATH
-------------------
+``GEOIP_LIBRARY_PATH``
+----------------------
 
 A string specifying the location of the GeoIP C library.  Typically,
 this setting is only used if the GeoIP C library is in a non-standard
@@ -74,16 +78,16 @@ location (e.g., ``/home/sue/lib/libGeoIP.so``).
 
 .. setting:: GEOIP_COUNTRY
 
-GEOIP_COUNTRY
--------------
+``GEOIP_COUNTRY``
+-----------------
 
 The basename to use for the GeoIP country data file.
 Defaults to ``'GeoIP.dat'``.
 
 .. setting:: GEOIP_CITY
 
-GEOIP_CITY
-----------
+``GEOIP_CITY``
+--------------
 
 The basename to use for the GeoIP city data file.
 Defaults to ``'GeoLiteCity.dat'``.
@@ -91,7 +95,7 @@ Defaults to ``'GeoLiteCity.dat'``.
 ``GeoIP`` API
 =============
 
-.. class:: GeoIP([path=None, cache=0, country=None, city=None])
+.. class:: GeoIP(path=None, cache=0, country=None, city=None)
 
 The ``GeoIP`` object does not require any parameters to use the default
 settings.  However, at the very least the :setting:`GEOIP_PATH` setting
