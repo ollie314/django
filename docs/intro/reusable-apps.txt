@@ -2,11 +2,11 @@
 Advanced tutorial: How to write reusable apps
 =============================================
 
-This advanced tutorial begins where :doc:`Tutorial 6 </intro/tutorial06>`
+This advanced tutorial begins where :doc:`Tutorial 7 </intro/tutorial07>`
 left off. We'll be turning our Web-poll into a standalone Python package
 you can reuse in new projects and share with other people.
 
-If you haven't recently completed Tutorials 1–6, we encourage you to review
+If you haven't recently completed Tutorials 1–7, we encourage you to review
 these so that your example project matches the one described below.
 
 Reusability matters
@@ -193,7 +193,7 @@ this. For a small app like polls, this process isn't too difficult.
        :filename: django-polls/setup.py
 
        import os
-       from setuptools import setup
+       from setuptools import find_packages, setup
 
        with open(os.path.join(os.path.dirname(__file__), 'README.rst')) as readme:
            README = readme.read()
@@ -204,7 +204,7 @@ this. For a small app like polls, this process isn't too difficult.
        setup(
            name='django-polls',
            version='0.1',
-           packages=['polls'],
+           packages=find_packages(),
            include_package_data=True,
            license='BSD License',  # example license
            description='A simple Django app to conduct Web-based polls.',

@@ -54,18 +54,19 @@ class CommonMiddleware(object):
 
         # Check for a redirect based on settings.PREPEND_WWW
         host = request.get_host()
+        must_prepend = settings.PREPEND_WWW and host and not host.startswith('www.')
+        redirect_url = ('%s://www.%s' % (request.scheme, host)) if must_prepend else ''
 
-        if settings.PREPEND_WWW and host and not host.startswith('www.'):
-            host = 'www.' + host
+        # Check if a slash should be appended
+        if self.should_redirect_with_slash(request):
+            path = self.get_full_path_with_slash(request)
+        else:
+            path = request.get_full_path()
 
-            # Check if we also need to append a slash so we can do it all
-            # with a single redirect.
-            if self.should_redirect_with_slash(request):
-                path = self.get_full_path_with_slash(request)
-            else:
-                path = request.get_full_path()
-
-            return self.response_redirect_class('%s://%s%s' % (request.scheme, host, path))
+        # Return a redirect if necessary
+        if redirect_url or path != request.get_full_path():
+            redirect_url += path
+            return self.response_redirect_class(redirect_url)
 
     def should_redirect_with_slash(self, request):
         """
@@ -162,18 +163,24 @@ class BrokenLinkEmailsMiddleware(object):
     def is_ignorable_request(self, request, uri, domain, referer):
         """
         Return True if the given request *shouldn't* notify the site managers
-        according to project settings or in three specific situations:
-         - If the referer is empty.
-         - If a '?' in referer is identified as a search engine source.
-         - If the referer is equal to the current URL, ignoring the scheme
-           (assumed to be a poorly implemented bot).
+        according to project settings or in situations outlined by the inline
+        comments.
         """
+        # The referer is empty.
         if not referer:
             return True
 
+        # APPEND_SLASH is enabled and the referer is equal to the current URL
+        # without a trailing slash indicating an internal redirect.
+        if settings.APPEND_SLASH and uri.endswith('/') and referer == uri[:-1]:
+            return True
+
+        # A '?' in referer is identified as a search engine source.
         if not self.is_internal_request(domain, referer) and '?' in referer:
             return True
 
+        # The referer is equal to the current URL, ignoring the scheme (assumed
+        # to be a poorly implemented bot).
         parsed_referer = urlparse(referer)
         if parsed_referer.netloc in ['', domain] and parsed_referer.path == uri:
             return True

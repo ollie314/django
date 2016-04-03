@@ -35,7 +35,7 @@ from .reverse_related import (
 RECURSIVE_RELATIONSHIP_CONSTANT = 'self'
 
 
-def resolve_relation(scope_model, relation, resolve_recursive_relationship=True):
+def resolve_relation(scope_model, relation):
     """
     Transform relation into a model or fully-qualified model string of the form
     "app_label.ModelName", relative to scope_model.
@@ -50,11 +50,12 @@ def resolve_relation(scope_model, relation, resolve_recursive_relationship=True)
     """
     # Check for recursive relations
     if relation == RECURSIVE_RELATIONSHIP_CONSTANT:
-        if resolve_recursive_relationship:
-            relation = scope_model
+        relation = scope_model
+
     # Look for an "app.Model" relation
-    elif isinstance(relation, six.string_types) and '.' not in relation:
-        relation = "%s.%s" % (scope_model._meta.app_label, relation)
+    if isinstance(relation, six.string_types):
+        if "." not in relation:
+            relation = "%s.%s" % (scope_model._meta.app_label, relation)
 
     return relation
 
@@ -290,8 +291,13 @@ class RelatedField(Field):
 
         if not cls._meta.abstract:
             if self.remote_field.related_name:
-                related_name = force_text(self.remote_field.related_name) % {
+                related_name = self.remote_field.related_name
+            else:
+                related_name = self.opts.default_related_name
+            if related_name:
+                related_name = force_text(related_name) % {
                     'class': cls.__name__.lower(),
+                    'model_name': cls._meta.model_name.lower(),
                     'app_label': cls._meta.app_label.lower()
                 }
                 self.remote_field.related_name = related_name
@@ -307,11 +313,6 @@ class RelatedField(Field):
                 field.remote_field.model = related
                 field.do_related_class(related, model)
             lazy_related_operation(resolve_related_class, cls, self.remote_field.model, field=self)
-        else:
-            # Bind a lazy reference to the app in which the model is defined.
-            self.remote_field.model = resolve_relation(
-                cls, self.remote_field.model, resolve_recursive_relationship=False
-            )
 
     def get_forward_related_filter(self, obj):
         """
@@ -948,11 +949,14 @@ class ForeignKey(ForeignObject):
         defaults.update(kwargs)
         return super(ForeignKey, self).formfield(**defaults)
 
+    def db_check(self, connection):
+        return []
+
     def db_type(self, connection):
         return self.target_field.rel_db_type(connection=connection)
 
     def db_parameters(self, connection):
-        return {"type": self.db_type(connection), "check": []}
+        return {"type": self.db_type(connection), "check": self.db_check(connection)}
 
     def convert_empty_strings(self, value, expression, connection, context):
         if (not value) and isinstance(value, six.string_types):
@@ -1560,11 +1564,6 @@ class ManyToManyField(RelatedField):
                 lazy_related_operation(resolve_through_model, cls, self.remote_field.through, field=self)
             elif not cls._meta.swapped:
                 self.remote_field.through = create_many_to_many_intermediary_model(self, cls)
-        else:
-            # Bind a lazy reference to the app in which the model is defined.
-            self.remote_field.through = resolve_relation(
-                cls, self.remote_field.through, resolve_recursive_relationship=False
-            )
 
         # Add the descriptor for the m2m relation.
         setattr(cls, self.name, ManyToManyDescriptor(self.remote_field, reverse=False))
@@ -1617,6 +1616,9 @@ class ManyToManyField(RelatedField):
                 initial = initial()
             defaults['initial'] = [i._get_pk_val() for i in initial]
         return super(ManyToManyField, self).formfield(**defaults)
+
+    def db_check(self, connection):
+        return None
 
     def db_type(self, connection):
         # A ManyToManyField is not represented by a single column,

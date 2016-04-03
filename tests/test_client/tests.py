@@ -432,11 +432,21 @@ class ClientTest(TestCase):
         self.assertFalse(login)
 
     def test_view_with_inactive_login(self):
-        "Request a page that is protected with @login, but use an inactive login"
+        """
+        An inactive user may login if the authenticate backend allows it.
+        """
+        credentials = {'username': 'inactive', 'password': 'password'}
+        self.assertFalse(self.client.login(**credentials))
 
-        login = self.client.login(username='inactive', password='password')
-        self.assertFalse(login)
+        with self.settings(AUTHENTICATION_BACKENDS=['django.contrib.auth.backends.AllowAllUsersModelBackend']):
+            self.assertTrue(self.client.login(**credentials))
 
+    @override_settings(
+        AUTHENTICATION_BACKENDS=[
+            'django.contrib.auth.backends.ModelBackend',
+            'django.contrib.auth.backends.AllowAllUsersModelBackend',
+        ]
+    )
     def test_view_with_inactive_force_login(self):
         "Request a page that is protected with @login, but use an inactive login"
 
@@ -445,7 +455,7 @@ class ClientTest(TestCase):
         self.assertRedirects(response, '/accounts/login/?next=/login_protected_view/')
 
         # Log in
-        self.client.force_login(self.u2)
+        self.client.force_login(self.u2, backend='django.contrib.auth.backends.AllowAllUsersModelBackend')
 
         # Request a page that requires a login
         response = self.client.get('/login_protected_view/')
@@ -612,6 +622,14 @@ class ClientTest(TestCase):
 
         # Check some response details
         self.assertContains(response, 'This is a test')
+
+    def test_relative_redirect(self):
+        response = self.client.get('/accounts/')
+        self.assertRedirects(response, '/accounts/login/')
+
+    def test_relative_redirect_no_trailing_slash(self):
+        response = self.client.get('/accounts/no_trailing_slash')
+        self.assertRedirects(response, '/accounts/login/')
 
     def test_mass_mail_sending(self):
         "Test that mass mail is redirected to a dummy outbox during test setup"

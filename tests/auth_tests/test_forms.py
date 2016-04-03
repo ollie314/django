@@ -1,5 +1,6 @@
 from __future__ import unicode_literals
 
+import datetime
 import re
 
 from django import forms
@@ -19,6 +20,7 @@ from django.utils.encoding import force_text
 from django.utils.text import capfirst
 from django.utils.translation import ugettext as _
 
+from .models.custom_user import CustomUser, ExtensionUser
 from .settings import AUTH_TEMPLATES
 
 
@@ -122,7 +124,51 @@ class UserCreationFormTest(TestDataMixin, TestCase):
             form['password2'].errors
         )
 
+    def test_custom_form(self):
+        class CustomUserCreationForm(UserCreationForm):
+            class Meta(UserCreationForm.Meta):
+                model = ExtensionUser
+                fields = UserCreationForm.Meta.fields + ('date_of_birth',)
 
+        data = {
+            'username': 'testclient',
+            'password1': 'testclient',
+            'password2': 'testclient',
+            'date_of_birth': '1988-02-24',
+        }
+        form = CustomUserCreationForm(data)
+        self.assertTrue(form.is_valid())
+
+    def test_custom_form_with_different_username_field(self):
+        class CustomUserCreationForm(UserCreationForm):
+            class Meta(UserCreationForm.Meta):
+                model = CustomUser
+                fields = ('email', 'date_of_birth')
+
+        data = {
+            'email': 'test@client222.com',
+            'password1': 'testclient',
+            'password2': 'testclient',
+            'date_of_birth': '1988-02-24',
+        }
+        form = CustomUserCreationForm(data)
+        self.assertTrue(form.is_valid())
+
+    def test_password_whitespace_not_stripped(self):
+        data = {
+            'username': 'testuser',
+            'password1': '   testpassword   ',
+            'password2': '   testpassword   ',
+        }
+        form = UserCreationForm(data)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['password1'], data['password1'])
+        self.assertEqual(form.cleaned_data['password2'], data['password2'])
+
+
+# To verify that the login form rejects inactive users, use an authentication
+# backend that allows them.
+@override_settings(AUTHENTICATION_BACKENDS=['django.contrib.auth.backends.AllowAllUsersModelBackend'])
 class AuthenticationFormTest(TestDataMixin, TestCase):
 
     def test_invalid_username(self):
@@ -231,6 +277,15 @@ class AuthenticationFormTest(TestDataMixin, TestCase):
         form = CustomAuthenticationForm()
         self.assertEqual(form.fields['username'].label, "")
 
+    def test_password_whitespace_not_stripped(self):
+        data = {
+            'username': 'testuser',
+            'password': ' pass ',
+        }
+        form = AuthenticationForm(None, data)
+        form.is_valid()  # Not necessary to have valid credentails for the test.
+        self.assertEqual(form.cleaned_data['password'], data['password'])
+
 
 class SetPasswordFormTest(TestDataMixin, TestCase):
 
@@ -281,6 +336,17 @@ class SetPasswordFormTest(TestDataMixin, TestCase):
             form["new_password2"].errors
         )
 
+    def test_password_whitespace_not_stripped(self):
+        user = User.objects.get(username='testclient')
+        data = {
+            'new_password1': '   password   ',
+            'new_password2': '   password   ',
+        }
+        form = SetPasswordForm(user, data)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['new_password1'], data['new_password1'])
+        self.assertEqual(form.cleaned_data['new_password2'], data['new_password2'])
+
 
 class PasswordChangeFormTest(TestDataMixin, TestCase):
 
@@ -330,6 +396,20 @@ class PasswordChangeFormTest(TestDataMixin, TestCase):
         user = User.objects.get(username='testclient')
         self.assertEqual(list(PasswordChangeForm(user, {}).fields),
                          ['old_password', 'new_password1', 'new_password2'])
+
+    def test_password_whitespace_not_stripped(self):
+        user = User.objects.get(username='testclient')
+        user.set_password('   oldpassword   ')
+        data = {
+            'old_password': '   oldpassword   ',
+            'new_password1': ' pass ',
+            'new_password2': ' pass ',
+        }
+        form = PasswordChangeForm(user, data)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['old_password'], data['old_password'])
+        self.assertEqual(form.cleaned_data['new_password1'], data['new_password1'])
+        self.assertEqual(form.cleaned_data['new_password2'], data['new_password2'])
 
 
 class UserChangeFormTest(TestDataMixin, TestCase):
@@ -406,6 +486,24 @@ class UserChangeFormTest(TestDataMixin, TestCase):
         # ReadOnlyPasswordHashWidget needs the initial
         # value to render correctly
         self.assertEqual(form.initial['password'], form['password'].value())
+
+    def test_custom_form(self):
+        class CustomUserChangeForm(UserChangeForm):
+            class Meta(UserChangeForm.Meta):
+                model = ExtensionUser
+                fields = ('username', 'password', 'date_of_birth',)
+
+        user = User.objects.get(username='testclient')
+        data = {
+            'username': 'testclient',
+            'password': 'testclient',
+            'date_of_birth': '1998-02-24',
+        }
+        form = CustomUserChangeForm(data, instance=user)
+        self.assertTrue(form.is_valid())
+        form.save()
+        self.assertEqual(form.cleaned_data['username'], 'testclient')
+        self.assertEqual(form.cleaned_data['date_of_birth'], datetime.date(1998, 2, 24))
 
 
 @override_settings(TEMPLATES=AUTH_TEMPLATES)
@@ -600,3 +698,14 @@ class AdminPasswordChangeFormTest(TestDataMixin, TestCase):
         self.assertEqual(password_changed.call_count, 0)
         form.save()
         self.assertEqual(password_changed.call_count, 1)
+
+    def test_password_whitespace_not_stripped(self):
+        user = User.objects.get(username='testclient')
+        data = {
+            'password1': ' pass ',
+            'password2': ' pass ',
+        }
+        form = AdminPasswordChangeForm(user, data)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['password1'], data['password1'])
+        self.assertEqual(form.cleaned_data['password2'], data['password2'])

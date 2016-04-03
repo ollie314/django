@@ -244,7 +244,7 @@ class BaseCommand(object):
         parser = CommandParser(self, prog="%s %s" % (os.path.basename(prog_name), subcommand),
             description=self.help or None)
         parser.add_argument('--version', action='version', version=self.get_version())
-        parser.add_argument('-v', '--verbosity', action='store', dest='verbosity', default='1',
+        parser.add_argument('-v', '--verbosity', action='store', dest='verbosity', default=1,
             type=int, choices=[0, 1, 2, 3],
             help='Verbosity level; 0=minimal output, 1=normal output, 2=verbose output, 3=very verbose output')
         parser.add_argument('--settings',
@@ -314,13 +314,13 @@ class BaseCommand(object):
         controlled by the ``requires_system_checks`` attribute, except if
         force-skipped).
         """
-        if options.get('no_color'):
+        if options['no_color']:
             self.style = no_style()
             self.stderr.style_func = None
         if options.get('stdout'):
             self.stdout = OutputWrapper(options['stdout'])
         if options.get('stderr'):
-            self.stderr = OutputWrapper(options.get('stderr'), self.stderr.style_func)
+            self.stderr = OutputWrapper(options['stderr'], self.stderr.style_func)
 
         saved_locale = None
         if not self.leave_locale_alone:
@@ -348,18 +348,17 @@ class BaseCommand(object):
             output = self.handle(*args, **options)
             if output:
                 if self.output_transaction:
-                    # This needs to be imported here, because it relies on
-                    # settings.
-                    from django.db import connections, DEFAULT_DB_ALIAS
                     connection = connections[options.get('database', DEFAULT_DB_ALIAS)]
-                    if connection.ops.start_transaction_sql():
-                        self.stdout.write(self.style.SQL_KEYWORD(connection.ops.start_transaction_sql()))
+                    output = '%s\n%s\n%s' % (
+                        self.style.SQL_KEYWORD(connection.ops.start_transaction_sql()),
+                        output,
+                        self.style.SQL_KEYWORD(connection.ops.end_transaction_sql()),
+                    )
                 self.stdout.write(output)
-                if self.output_transaction:
-                    self.stdout.write('\n' + self.style.SQL_KEYWORD(connection.ops.end_transaction_sql()))
         finally:
             if saved_locale is not None:
                 translation.activate(saved_locale)
+        return output
 
     def check(self, app_configs=None, tags=None, display_num_errors=False,
               include_deployment_checks=False, fail_level=checks.ERROR):

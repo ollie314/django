@@ -194,7 +194,7 @@ class Command(BaseCommand):
                                    ', %s post-processed'
                                    % post_processed_count or ''),
             }
-            self.stdout.write(summary)
+            return summary
 
     def log(self, msg, level=2):
         """
@@ -221,12 +221,16 @@ class Command(BaseCommand):
                          smart_text(fpath), level=1)
             else:
                 self.log("Deleting '%s'" % smart_text(fpath), level=1)
-                full_path = self.storage.path(fpath)
-                if not os.path.exists(full_path) and os.path.lexists(full_path):
-                    # Delete broken symlinks
-                    os.unlink(full_path)
-                else:
+                try:
+                    full_path = self.storage.path(fpath)
+                except NotImplementedError:
                     self.storage.delete(fpath)
+                else:
+                    if not os.path.exists(full_path) and os.path.lexists(full_path):
+                        # Delete broken symlinks
+                        os.unlink(full_path)
+                    else:
+                        self.storage.delete(fpath)
         for d in dirs:
             self.clear_dir(os.path.join(path, d))
 
@@ -237,15 +241,14 @@ class Command(BaseCommand):
         if self.storage.exists(prefixed_path):
             try:
                 # When was the target file modified last time?
-                target_last_modified = \
-                    self.storage.modified_time(prefixed_path)
+                target_last_modified = self.storage.get_modified_time(prefixed_path)
             except (OSError, NotImplementedError, AttributeError):
-                # The storage doesn't support ``modified_time`` or failed
+                # The storage doesn't support get_modified_time() or failed
                 pass
             else:
                 try:
                     # When was the source file modified last time?
-                    source_last_modified = source_storage.modified_time(path)
+                    source_last_modified = source_storage.get_modified_time(path)
                 except (OSError, NotImplementedError, AttributeError):
                     pass
                 else:

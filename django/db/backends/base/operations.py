@@ -191,6 +191,7 @@ class BaseDatabaseOperations(object):
         search of the given field_name. Note that the resulting string should
         contain a '%s' placeholder for the value being searched against.
         """
+        # RemovedInDjango20Warning
         raise NotImplementedError('Full-text search is not implemented for this database backend')
 
     def last_executed_query(self, cursor, sql, params):
@@ -486,7 +487,7 @@ class BaseDatabaseOperations(object):
             raise ValueError("Django does not support timezone-aware times.")
         return six.text_type(value)
 
-    def adapt_decimalfield_value(self, value, max_digits, decimal_places):
+    def adapt_decimalfield_value(self, value, max_digits=None, decimal_places=None):
         """
         Transforms a decimal.Decimal value to an object compatible with what is
         expected by the backend driver for decimal (numeric) columns.
@@ -577,6 +578,13 @@ class BaseDatabaseOperations(object):
     def combine_duration_expression(self, connector, sub_expressions):
         return self.combine_expression(connector, sub_expressions)
 
+    def binary_placeholder_sql(self, value):
+        """
+        Some backends require special syntax to insert binary content (MySQL
+        for example uses '_binary %s').
+        """
+        return '%s'
+
     def modify_insert_params(self, placeholder, params):
         """Allow modification of insert parameters. Needed for Oracle Spatial
         backend due to #10888.
@@ -590,3 +598,10 @@ class BaseDatabaseOperations(object):
         range of the column type bound to the field.
         """
         return self.integer_field_ranges[internal_type]
+
+    def subtract_temporals(self, internal_type, lhs, rhs):
+        if self.connection.features.supports_temporal_subtraction:
+            lhs_sql, lhs_params = lhs
+            rhs_sql, rhs_params = rhs
+            return "(%s - %s)" % (lhs_sql, rhs_sql), lhs_params + rhs_params
+        raise NotImplementedError("This backend does not support %s subtraction." % internal_type)

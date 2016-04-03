@@ -13,7 +13,7 @@ from django.contrib.admin.models import ADDITION, DELETION, LogEntry
 from django.contrib.admin.options import TO_FIELD_VAR
 from django.contrib.admin.templatetags.admin_static import static
 from django.contrib.admin.templatetags.admin_urls import add_preserved_filters
-from django.contrib.admin.tests import AdminSeleniumWebDriverTestCase
+from django.contrib.admin.tests import AdminSeleniumTestCase
 from django.contrib.admin.utils import quote
 from django.contrib.admin.views.main import IS_POPUP_VAR
 from django.contrib.auth import REDIRECT_FIELD_NAME, get_permission_codename
@@ -2062,6 +2062,18 @@ class AdminViewDeletedObjectsTest(TestCase):
             '<li>Answer: <a href="%s">Yes.</a></li>' % reverse('admin:admin_views_answer_change', args=(a2.pk,))
         )
 
+    def test_post_delete_protected(self):
+        """
+        A POST request to delete protected objects should display the page
+        which says the deletion is prohibited.
+        """
+        q = Question.objects.create(question='Why?')
+        Answer.objects.create(question=q, answer='Because.')
+
+        response = self.client.post(reverse('admin:admin_views_question_delete', args=(q.pk,)), {'post': 'yes'})
+        self.assertEqual(Question.objects.count(), 1)
+        self.assertContains(response, "would require deleting the following protected related objects")
+
     def test_not_registered(self):
         should_contain = """<li>Secret hideout: underground bunker"""
         response = self.client.get(reverse('admin:admin_views_villain_delete', args=(self.v1.pk,)))
@@ -3111,6 +3123,8 @@ class AdminActionsTest(TestCase):
             'action': 'delete_selected',
             'index': 0,
         }
+        delete_confirmation_data = action_data.copy()
+        delete_confirmation_data['post'] = 'yes'
 
         response = self.client.post(reverse('admin:admin_views_question_changelist'), action_data)
 
@@ -3125,6 +3139,12 @@ class AdminActionsTest(TestCase):
             '<li>Answer: <a href="%s">Yes.</a></li>' % reverse('admin:admin_views_answer_change', args=(a2.pk,)),
             html=True
         )
+
+        # A POST request to delete protected objects should display the page
+        # which says the deletion is prohibited.
+        response = self.client.post(reverse('admin:admin_views_question_changelist'), delete_confirmation_data)
+        self.assertContains(response, "would require deleting the following protected related objects")
+        self.assertEqual(Question.objects.count(), 2)
 
     def test_model_admin_default_delete_action_no_change_url(self):
         """
@@ -4117,10 +4137,9 @@ class PrePopulatedTest(TestCase):
 
 
 @override_settings(ROOT_URLCONF='admin_views.urls')
-class SeleniumAdminViewsFirefoxTests(AdminSeleniumWebDriverTestCase):
+class SeleniumTests(AdminSeleniumTestCase):
 
-    available_apps = ['admin_views'] + AdminSeleniumWebDriverTestCase.available_apps
-    webdriver_class = 'selenium.webdriver.firefox.webdriver.WebDriver'
+    available_apps = ['admin_views'] + AdminSeleniumTestCase.available_apps
 
     def setUp(self):
         self.superuser = User.objects.create_superuser(username='super', password='secret', email='super@example.com')
@@ -4442,13 +4461,22 @@ class SeleniumAdminViewsFirefoxTests(AdminSeleniumWebDriverTestCase):
         self.assertEqual(select.first_selected_option.text, '---------')
         self.assertEqual(select.first_selected_option.get_attribute('value'), '')
 
-
-class SeleniumAdminViewsChromeTests(SeleniumAdminViewsFirefoxTests):
-    webdriver_class = 'selenium.webdriver.chrome.webdriver.WebDriver'
-
-
-class SeleniumAdminViewsIETests(SeleniumAdminViewsFirefoxTests):
-    webdriver_class = 'selenium.webdriver.ie.webdriver.WebDriver'
+    def test_list_editable_raw_id_fields(self):
+        parent = ParentWithUUIDPK.objects.create(title='test')
+        parent2 = ParentWithUUIDPK.objects.create(title='test2')
+        RelatedWithUUIDPKModel.objects.create(parent=parent)
+        self.admin_login(username='super', password='secret', login_url=reverse('admin:index'))
+        change_url = reverse('admin:admin_views_relatedwithuuidpkmodel_changelist', current_app=site2.name)
+        self.selenium.get(self.live_server_url + change_url)
+        self.selenium.find_element_by_id('lookup_id_form-0-parent').click()
+        self.wait_for_popup()
+        self.selenium.switch_to.window(self.selenium.window_handles[-1])
+        # Select "parent2" in the popup.
+        self.selenium.find_element_by_link_text(str(parent2.pk)).click()
+        self.selenium.switch_to.window(self.selenium.window_handles[0])
+        # The newly selected pk should appear in the raw id input.
+        value = self.selenium.find_element_by_id('id_form-0-parent').get_attribute('value')
+        self.assertEqual(value, str(parent2.pk))
 
 
 @override_settings(ROOT_URLCONF='admin_views.urls')

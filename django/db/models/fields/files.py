@@ -42,10 +42,10 @@ class FieldFile(File):
         if not self:
             raise ValueError("The '%s' attribute has no file associated with it." % self.field.name)
 
-    def _get_file(self):
+    def _get_file(self, mode='rb'):
         self._require_file()
         if not hasattr(self, '_file') or self._file is None:
-            self._file = self.storage.open(self.name, 'rb')
+            self._file = self.storage.open(self.name, mode)
         return self._file
 
     def _set_file(self, file):
@@ -74,8 +74,7 @@ class FieldFile(File):
     size = property(_get_size)
 
     def open(self, mode='rb'):
-        self._require_file()
-        self.file.open(mode)
+        self._get_file(mode)
     # open() doesn't alter the file's contents, but it does reset the pointer
     open.alters_data = True
 
@@ -87,9 +86,6 @@ class FieldFile(File):
         name = self.field.generate_filename(self.instance, name)
         self.name = self.storage.save(name, content, max_length=self.field.max_length)
         setattr(self.instance, self.field.name, self.name)
-
-        # Update the filesize cache
-        self._size = content.size
         self._committed = True
 
         # Save the object because it has changed, unless save is False
@@ -110,10 +106,6 @@ class FieldFile(File):
 
         self.name = None
         setattr(self.instance, self.field.name, self.name)
-
-        # Delete the filesize cache
-        if hasattr(self, '_size'):
-            del self._size
         self._committed = False
 
         if save:

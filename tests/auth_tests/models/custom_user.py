@@ -3,6 +3,7 @@ from django.contrib.auth.models import (
     PermissionsMixin, UserManager,
 )
 from django.db import models
+from django.utils.encoding import python_2_unicode_compatible
 
 
 # The custom User uses email as the unique identifier, and requires
@@ -32,6 +33,7 @@ class CustomUserManager(BaseUserManager):
         return u
 
 
+@python_2_unicode_compatible
 class CustomUser(AbstractBaseUser):
     email = models.EmailField(verbose_name='email address', max_length=255, unique=True)
     is_active = models.BooleanField(default=True)
@@ -49,7 +51,7 @@ class CustomUser(AbstractBaseUser):
     def get_short_name(self):
         return self.email
 
-    def __unicode__(self):
+    def __str__(self):
         return self.email
 
     # Maybe required?
@@ -93,6 +95,15 @@ class RemoveGroupsAndPermissions(object):
     def __exit__(self, exc_type, exc_value, traceback):
         AbstractUser._meta.local_many_to_many = self._old_au_local_m2m
         PermissionsMixin._meta.local_many_to_many = self._old_pm_local_m2m
+
+
+class CustomUserWithoutIsActiveField(AbstractBaseUser):
+    username = models.CharField(max_length=150, unique=True)
+    email = models.EmailField(unique=True)
+
+    objects = UserManager()
+
+    USERNAME_FIELD = 'username'
 
 
 # The extension user is a simple extension of the built-in user class,

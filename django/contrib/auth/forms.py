@@ -69,9 +69,11 @@ class UserCreationForm(forms.ModelForm):
         'password_mismatch': _("The two password fields didn't match."),
     }
     password1 = forms.CharField(label=_("Password"),
+        strip=False,
         widget=forms.PasswordInput)
     password2 = forms.CharField(label=_("Password confirmation"),
         widget=forms.PasswordInput,
+        strip=False,
         help_text=_("Enter the same password as before, for verification."))
 
     class Meta:
@@ -80,7 +82,7 @@ class UserCreationForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super(UserCreationForm, self).__init__(*args, **kwargs)
-        self.fields['username'].widget.attrs.update({'autofocus': ''})
+        self.fields[self._meta.model.USERNAME_FIELD].widget.attrs.update({'autofocus': ''})
 
     def clean_password2(self):
         password1 = self.cleaned_data.get("password1")
@@ -134,7 +136,7 @@ class AuthenticationForm(forms.Form):
         max_length=254,
         widget=forms.TextInput(attrs={'autofocus': ''}),
     )
-    password = forms.CharField(label=_("Password"), widget=forms.PasswordInput)
+    password = forms.CharField(label=_("Password"), strip=False, widget=forms.PasswordInput)
 
     error_messages = {
         'invalid_login': _("Please enter a correct %(username)s and password. "
@@ -276,8 +278,10 @@ class SetPasswordForm(forms.Form):
     }
     new_password1 = forms.CharField(label=_("New password"),
                                     widget=forms.PasswordInput,
+                                    strip=False,
                                     help_text=password_validation.password_validators_help_text_html())
     new_password2 = forms.CharField(label=_("New password confirmation"),
+                                    strip=False,
                                     widget=forms.PasswordInput)
 
     def __init__(self, user, *args, **kwargs):
@@ -315,6 +319,7 @@ class PasswordChangeForm(SetPasswordForm):
     })
     old_password = forms.CharField(
         label=_("Old password"),
+        strip=False,
         widget=forms.PasswordInput(attrs={'autofocus': ''}),
     )
 
@@ -344,11 +349,13 @@ class AdminPasswordChangeForm(forms.Form):
     password1 = forms.CharField(
         label=_("Password"),
         widget=forms.PasswordInput(attrs={'autofocus': ''}),
+        strip=False,
         help_text=password_validation.password_validators_help_text_html(),
     )
     password2 = forms.CharField(
         label=_("Password (again)"),
         widget=forms.PasswordInput,
+        strip=False,
         help_text=_("Enter the same password as before, for verification."),
     )
 

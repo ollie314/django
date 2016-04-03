@@ -70,6 +70,10 @@ Minor features
 :mod:`django.contrib.auth`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+* Added support for the :ref:`Argon2 password hash <argon2_usage>`. It's
+  recommended over PBKDF2, however, it's not the default as it requires a
+  third-party library.
+
 * The default iteration count for the PBKDF2 password hasher has been increased
   by 25%. This backwards compatible change will not affect users who have
   subclassed ``django.contrib.auth.hashers.PBKDF2PasswordHasher`` to change the
@@ -85,6 +89,10 @@ Minor features
 * The new :setting:`LOGOUT_REDIRECT_URL` setting controls the redirect of the
   :func:`~django.contrib.auth.views.logout` view, if the view doesn't get a
   ``next_page`` argument.
+
+* The new ``redirect_authenticated_user`` parameter for the
+  :func:`~django.contrib.auth.views.login` view allows redirecting
+  authenticated users visiting the login page.
 
 :mod:`django.contrib.contenttypes`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -130,6 +138,14 @@ Minor features
   <django.contrib.gis.geos.LineString.closed>` and
   :attr:`MultiLineString.closed
   <django.contrib.gis.geos.MultiLineString.closed>` properties.
+
+* The :doc:`GeoJSON serializer </ref/contrib/gis/serializers>` now outputs the
+  primary key of objects in the ``properties`` dictionary if specific fields
+  aren't specified.
+
+* The ability to replicate input data on the :meth:`GDALBand.data()
+  <django.contrib.gis.gdal.GDALBand.data>` method was added. Band data can
+  now be updated with repeated values efficiently.
 
 :mod:`django.contrib.messages`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -193,7 +209,19 @@ CSRF
 Database backends
 ~~~~~~~~~~~~~~~~~
 
-* ...
+* Temporal data subtraction was unified on all backends.
+
+* If the database supports it, backends can set
+  ``DatabaseFeatures.can_return_ids_from_bulk_insert=True`` and implement
+  ``DatabaseOperations.fetch_returned_insert_ids()`` to set primary keys
+  on objects created using ``QuerySet.bulk_create()``.
+
+* Added keyword arguments to the ``as_sql()`` methods of various expressions
+  (``Func``, ``When``, ``Case``, and ``OrderBy``) to allow database backends to
+  customize them without mutating ``self``, which isn't safe when using
+  different database backends. See the ``arg_joiner`` and ``**extra_context``
+  parameters of :meth:`Func.as_sql() <django.db.models.Func.as_sql>` for an
+  example.
 
 Email
 ~~~~~
@@ -203,7 +231,13 @@ Email
 File Storage
 ~~~~~~~~~~~~
 
-* ...
+* Storage backends now present a timezone-aware API with new methods
+  :meth:`~django.core.files.storage.Storage.get_accessed_time`,
+  :meth:`~django.core.files.storage.Storage.get_created_time`, and
+  :meth:`~django.core.files.storage.Storage.get_modified_time`. They return a
+  timezone-aware ``datetime`` if :setting:`USE_TZ` is ``True`` and a naive
+  ``datetime`` in the local timezone otherwise.
+
 
 File Uploads
 ~~~~~~~~~~~~
@@ -225,10 +259,23 @@ Generic Views
 Internationalization
 ~~~~~~~~~~~~~~~~~~~~
 
-* ...
+* The :func:`~django.conf.urls.i18n.i18n_patterns` helper function can now be
+  used in a root URLConf specified using :attr:`request.urlconf
+  <django.http.HttpRequest.urlconf>`.
+
+* By setting the new ``prefix_default_language`` parameter for
+  :func:`~django.conf.urls.i18n.i18n_patterns` to ``False``, you can allow
+  accessing the default language without a URL prefix.
+
+* :func:`~django.views.i18n.set_language` now returns a 204 status code (No
+  Content) for AJAX requests when there is no ``next`` parameter in ``POST`` or
+  ``GET``.
 
 Management Commands
 ~~~~~~~~~~~~~~~~~~~
+
+* :func:`~django.core.management.call_command` now returns the value returned
+  from the ``command.handle()`` method.
 
 * The new :option:`check --fail-level` option allows specifying the message
   level that will cause the command to exit with a non-zero status.
@@ -253,6 +300,15 @@ Management Commands
   may be set to ``True`` if you want your command to print a warning, like
   :djadmin:`runserver` does, if the set of migrations on disk don't match the
   migrations in the database.
+
+* To assist with testing, :func:`~django.core.management.call_command` now
+  accepts a command object as the first argument.
+
+* The :djadmin:`shell` command supports tab completion on systems using
+  ``libedit``, e.g. Mac OSX.
+
+* The :djadmin:`inspectdb` command lets you choose what tables should be
+  inspected by specifying their names as arguments.
 
 Migrations
 ~~~~~~~~~~
@@ -295,6 +351,17 @@ Models
   app label and class interpolation using the ``'%(app_label)s'`` and
   ``'%(class)s'`` strings.
 
+* The :func:`~django.db.models.prefetch_related_objects` function is now a
+  public API.
+
+* :meth:`QuerySet.bulk_create() <django.db.models.query.QuerySet.bulk_create>`
+  sets the primary key on objects when using PostgreSQL.
+
+* Added the :class:`~django.db.models.functions.Cast` database function.
+
+* A proxy model may now inherit multiple proxy models that share a common
+  non-abstract parent class.
+
 Requests and Responses
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -309,6 +376,10 @@ Requests and Responses
   <django.http.HttpRequest.content_type>` and
   :attr:`~django.http.HttpRequest.content_params` attributes which are
   parsed from the ``CONTENT_TYPE`` header.
+
+* The parser for ``request.COOKIES`` is simplified to better match the behavior
+  of browsers. ``request.COOKIES`` may now contain cookies that are invalid
+  according to :rfc:`6265` but are possible to set via ``document.cookie``.
 
 Serialization
 ~~~~~~~~~~~~~
@@ -330,11 +401,21 @@ Templates
 
 * Added the ``is`` comparison operator to the :ttag:`if` tag.
 
+* Allowed :tfilter:`dictsort` to order a list of lists by an element at a
+  specified index.
+
 Tests
 ~~~~~
 
 * To better catch bugs, :class:`~django.test.TestCase` now checks deferrable
   database constraints at the end of each test.
+
+* Tests and test cases can be :ref:`marked with tags <topics-tagging-tests>`
+  and run selectively with the new :option:`test --tag` and :option:`test
+  --exclude-tag` options.
+
+* Added the :setting:`DATABASES['TEST']['MIGRATE'] <TEST_MIGRATE>` option to
+  allow disabling of migrations during test database creation.
 
 URLs
 ~~~~
@@ -350,6 +431,10 @@ Validators
 * :class:`~django.core.validators.URLValidator` now limits the length of
   domain name labels to 63 characters and the total length of domain
   names to 253 characters per :rfc:`1034`.
+
+* :func:`~django.core.validators.int_list_validator` now accepts an optional
+  ``allow_negative`` boolean parameter, defaulting to ``False``, to allow
+  negative integers.
 
 Backwards incompatible changes in 1.10
 ======================================
@@ -369,6 +454,13 @@ Database backend API
   practice be any numeric Python type. ``decimal.Decimal`` values retrieved
   from the database are now converted to ``float`` to make it easier to combine
   them with values used by the GIS libraries.
+
+* In order to enable temporal subtraction you must set the
+  ``supports_temporal_subtraction`` database feature flag to ``True`` and
+  implement the ``DatabaseOperations.subtract_temporals()`` method. This
+  method should return the SQL and parameters required to compute the
+  difference in microseconds between the ``lhs`` and ``rhs`` arguments in the
+  datatype used to store :class:`~django.db.models.DurationField`.
 
 ``select_related()`` prohibits non-relational fields for nested relations
 -------------------------------------------------------------------------
@@ -494,6 +586,50 @@ In older versions, assigning ``None`` to a non-nullable ``ForeignKey`` or
 not allow null values.')``. For consistency with other model fields which don't
 have a similar check, this check is removed.
 
+Removed weak password hashers from the default ``PASSWORD_HASHERS`` setting
+---------------------------------------------------------------------------
+
+Django 0.90 stored passwords as unsalted MD5. Django 0.91 added support for
+salted SHA1 with automatic upgrade of passwords when a user logs in. Django 1.4
+added PBKDF2 as the default password hasher.
+
+If you have an old Django project with MD5 or SHA1 (even salted) encoded
+passwords, be aware that these can be cracked fairly easily with today's
+hardware. To make Django users acknowledge continued use of weak hashers, the
+following hashers are removed from the default :setting:`PASSWORD_HASHERS`
+setting::
+
+    'django.contrib.auth.hashers.SHA1PasswordHasher'
+    'django.contrib.auth.hashers.MD5PasswordHasher'
+    'django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher'
+    'django.contrib.auth.hashers.UnsaltedMD5PasswordHasher'
+    'django.contrib.auth.hashers.CryptPasswordHasher'
+
+Consider using a :ref:`wrapped password hasher <wrapping-password-hashers>` to
+strengthen the hashes in your database. If that's not feasible, add the
+:setting:`PASSWORD_HASHERS` setting to your project and add back any hashers
+that you need.
+
+You can check if your database has any of the removed hashers like this::
+
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    # Unsalted MD5/SHA1:
+    User.objects.filter(password__startswith='md5$$')
+    User.objects.filter(password__startswith='sha1$$')
+    # Salted MD5/SHA1:
+    User.objects.filter(password__startswith='md5$').exclude(password__startswith='md5$$')
+    User.objects.filter(password__startswith='sha1$').exclude(password__startswith='sha1$$')
+    # Crypt hasher:
+    User.objects.filter(password__startswith='crypt$$')
+
+    from django.db.models import CharField
+    from django.db.models.functions import Length
+    CharField.register_lookup(Length)
+    # Unsalted MD5 passwords might not have an 'md5$$' prefix:
+    User.objects.filter(password__length=32)
+
 Miscellaneous
 -------------
 
@@ -545,6 +681,36 @@ Miscellaneous
 * Tests that violate deferrable database constraints will now error when run on
   a database that supports deferrable constraints.
 
+* Built-in management commands now use indexing of keys in ``options``, e.g.
+  ``options['verbosity']``, instead of ``options.get()`` and no longer perform
+  any type coercion. This could be a problem if you're calling commands using
+  ``Command.execute()`` (which bypasses the argument parser that sets a default
+  value) instead of :func:`~django.core.management.call_command`. Instead of
+  calling ``Command.execute()``, pass the command object as the first argument
+  to ``call_command()``.
+
+* :class:`~django.contrib.auth.backends.ModelBackend` and
+  :class:`~django.contrib.auth.backends.RemoteUserBackend` now reject inactive
+  users. This means that inactive users can't login and will be logged
+  out if they are switched from ``is_active=True`` to ``False``. If you need
+  the previous behavior, use the new
+  :class:`~django.contrib.auth.backends.AllowAllUsersModelBackend` or
+  :class:`~django.contrib.auth.backends.AllowAllUsersRemoteUserBackend`
+  in :setting:`AUTHENTICATION_BACKENDS` instead.
+
+* In light of the previous change, the test client's
+  :meth:`~django.test.Client.login()` method no longer always rejects inactive
+  users but instead delegates this decision to the authentication backend.
+
+* :func:`django.views.i18n.set_language` may now return a 204 status code for
+  AJAX requests.
+
+* The ``base_field`` attribute of
+  :class:`~django.contrib.postgres.fields.RangeField` is now a type of field,
+  not an instance of a field.  If you have created a custom subclass of
+  :class:`~django.contrib.postgres.fields.RangeField`, you should change the
+  ``base_field`` attribute.
+
 .. _deprecated-features-1.10:
 
 Features deprecated in 1.10
@@ -564,6 +730,21 @@ added in Django 1.9::
         >>> e.related_set.set([obj1, obj2, obj3])
 
 This prevents confusion about an assignment resulting in an implicit save.
+
+Non-timezone-aware :class:`~django.core.files.storage.Storage` API
+------------------------------------------------------------------
+
+The old, non-timezone-aware methods ``accessed_time()``, ``created_time()``,
+and ``modified_time()`` are deprecated in favor of the new ``get_*_time()``
+methods.
+
+Third-party storage backends should implement the new methods and mark the old
+ones as deprecated. Until then, the new ``get_*_time()`` methods on the base
+:class:`~django.core.files.storage.Storage` class convert ``datetime``\s from
+the old methods as required and emit a deprecation warning as they do so.
+
+Third-party storage backends may retain the old methods as long as they
+wish to support earlier versions of Django.
 
 :mod:`django.contrib.gis`
 -------------------------
@@ -607,6 +788,67 @@ longer than the 4000 byte limit of ``NVARCHAR2``, you should use ``TextField``
 field (e.g. annotating the model with an aggregation or using ``distinct()``)
 you'll need to change them (to defer the field).
 
+Using a model name as a query lookup when ``default_related_name`` is set
+-------------------------------------------------------------------------
+
+Assume the following models::
+
+    from django.db import models
+
+    class Foo(models.Model):
+        pass
+
+    class Bar(models.Model):
+        foo = models.ForeignKey(Foo)
+
+        class Meta:
+            default_related_name = 'bars'
+
+In older versions, :attr:`~django.db.models.Options.default_related_name`
+couldn't be used as a query lookup. This is fixed and support for the old
+lookup name is deprecated. For example, since ``default_related_name`` is set
+in model ``Bar``, instead of using the model name ``bar`` as the lookup::
+
+    >>> bar = Bar.objects.get(pk=1)
+    >>> Foo.objects.get(bar=bar)
+
+use the default_related_name ``bars``::
+
+    >>> Foo.objects.get(bars=bar)
+
+.. _search-lookup-replacement:
+
+``__search`` query lookup
+-------------------------
+
+The ``search`` lookup, which supports MySQL only and is extremely limited in
+features, is deprecated. Replace it with a custom lookup::
+
+    from django.db import models
+
+    class Search(models.Lookup):
+        lookup_name = 'search'
+
+        def as_mysql(self, compiler, connection):
+            lhs, lhs_params = self.process_lhs(compiler, connection)
+            rhs, rhs_params = self.process_rhs(compiler, connection)
+            params = lhs_params + rhs_params
+            return 'MATCH (%s) AGAINST (%s IN BOOLEAN MODE)' % (lhs, rhs), params
+
+    models.CharField.register_lookup(Search)
+    models.TextField.register_lookup(Search)
+
+Custom manager classes available through ``prefetch_related`` must define a ``_apply_rel_filters()`` method
+-----------------------------------------------------------------------------------------------------------
+
+If you defined a custom manager class available through
+:meth:`~django.db.models.query.QuerySet.prefetch_related` you must make sure
+it defines a ``_apply_rel_filters()`` method.
+
+This method must accept a :class:`~django.db.models.query.QuerySet` instance
+as its single argument and return a filtered version of the queryset for the
+model instance the manager is bound to.
+
 Miscellaneous
 -------------
 
@@ -622,6 +864,8 @@ Miscellaneous
 
 * Importing from the ``django.core.urlresolvers`` module is deprecated in
   favor of its new location, :mod:`django.urls`.
+
+* The template ``Context.has_key()`` method is deprecated in favor of ``in``.
 
 .. _removed-features-1.10:
 
@@ -650,6 +894,9 @@ removed in Django 1.10 (please see the :ref:`deprecation timeline
 
 * The ability to :func:`~django.urls.reverse` URLs using a dotted Python path
   is removed.
+
+* The ability to use a dotted Python path for the ``LOGIN_URL`` and
+  ``LOGIN_REDIRECT_URL`` settings is removed.
 
 * Support for ``optparse`` is dropped for custom management commands.
 

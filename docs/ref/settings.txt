@@ -710,6 +710,17 @@ The creation-order dependencies of the database. See the documentation
 on :ref:`controlling the creation order of test databases
 <topics-testing-creation-dependencies>` for details.
 
+.. setting:: TEST_MIGRATE
+
+``MIGRATE``
+^^^^^^^^^^^
+
+.. versionadded:: 1.10
+
+Default: ``True``
+
+If set to ``False``, Django won't use migrations to create the test database.
+
 .. setting:: TEST_MIRROR
 
 ``MIRROR``
@@ -993,8 +1004,8 @@ environment, such as all the currently defined Django settings (from
 ``settings.py``).
 
 As a security measure, Django will *not* include settings that might be
-sensitive (or offensive), such as :setting:`SECRET_KEY`. Specifically, it will
-exclude any setting whose name includes any of the following:
+sensitive, such as :setting:`SECRET_KEY`. Specifically, it will exclude any
+setting whose name includes any of the following:
 
 * ``'API'``
 * ``'KEY'``
@@ -2624,9 +2635,9 @@ The URL where requests are redirected after login when the
 This is used by the :func:`~django.contrib.auth.decorators.login_required`
 decorator, for example.
 
-This setting also accepts view function names and :ref:`named URL patterns
-<naming-url-patterns>` which can be used to reduce configuration duplication
-since you don't have to define the URL in two places (``settings`` and URLconf).
+This setting also accepts :ref:`named URL patterns <naming-url-patterns>` which
+can be used to reduce configuration duplication since you don't have to define
+the URL in two places (``settings`` and URLconf).
 
 .. setting:: LOGIN_URL
 
@@ -2638,9 +2649,9 @@ Default: ``'/accounts/login/'``
 The URL where requests are redirected for login, especially when using the
 :func:`~django.contrib.auth.decorators.login_required` decorator.
 
-This setting also accepts view function names and :ref:`named URL patterns
-<naming-url-patterns>` which can be used to reduce configuration duplication
-since you don't have to define the URL in two places (``settings`` and URLconf).
+This setting also accepts :ref:`named URL patterns <naming-url-patterns>` which
+can be used to reduce configuration duplication since you don't have to define
+the URL in two places (``settings`` and URLconf).
 
 .. setting:: LOGOUT_REDIRECT_URL
 
@@ -2658,9 +2669,9 @@ The URL where requests are redirected after a user logs out using the
 If ``None``, no redirect will be performed and the logout view will be
 rendered.
 
-This setting also accepts view function names and :ref:`named URL patterns
-<naming-url-patterns>` which can be used to reduce configuration duplication
-since you don't have to define the URL in two places (``settings`` and URLconf).
+This setting also accepts :ref:`named URL patterns <naming-url-patterns>` which
+can be used to reduce configuration duplication since you don't have to define
+the URL in two places (``settings`` and URLconf).
 
 .. setting:: PASSWORD_RESET_TIMEOUT_DAYS
 
@@ -2684,14 +2695,26 @@ Default::
     [
         'django.contrib.auth.hashers.PBKDF2PasswordHasher',
         'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+        'django.contrib.auth.hashers.Argon2PasswordHasher',
         'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
         'django.contrib.auth.hashers.BCryptPasswordHasher',
-        'django.contrib.auth.hashers.SHA1PasswordHasher',
-        'django.contrib.auth.hashers.MD5PasswordHasher',
-        'django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher',
-        'django.contrib.auth.hashers.UnsaltedMD5PasswordHasher',
-        'django.contrib.auth.hashers.CryptPasswordHasher',
     ]
+
+.. versionchanged:: 1.10
+
+    The following hashers were removed from the defaults::
+
+        'django.contrib.auth.hashers.SHA1PasswordHasher'
+        'django.contrib.auth.hashers.MD5PasswordHasher'
+        'django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher'
+        'django.contrib.auth.hashers.UnsaltedMD5PasswordHasher'
+        'django.contrib.auth.hashers.CryptPasswordHasher'
+
+    Consider using a :ref:`wrapped password hasher <wrapping-password-hashers>`
+    to strengthen the hashes in your database. If that's not feasible, add this
+    setting to your project and add back any hashers that you need.
+
+    Also, the ``Argon2PasswordHasher`` was added.
 
 .. setting:: AUTH_PASSWORD_VALIDATORS
 

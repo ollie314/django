@@ -3,20 +3,19 @@ from __future__ import unicode_literals
 
 import gettext
 import json
-import os
-import unittest
 from os import path
 
 from django.conf import settings
 from django.test import (
-    LiveServerTestCase, SimpleTestCase, TestCase, modify_settings,
-    override_settings,
+    SimpleTestCase, TestCase, modify_settings, override_settings,
 )
+from django.test.selenium import SeleniumTestCase
 from django.urls import reverse
 from django.utils import six
 from django.utils._os import upath
-from django.utils.module_loading import import_string
-from django.utils.translation import LANGUAGE_SESSION_KEY, override
+from django.utils.translation import (
+    LANGUAGE_SESSION_KEY, get_language, override,
+)
 
 from ..urls import locale_dir
 
@@ -25,26 +24,95 @@ from ..urls import locale_dir
 class I18NTests(TestCase):
     """ Tests django views in django/views/i18n.py """
 
+    def _get_inactive_language_code(self):
+        """Return language code for a language which is not activated."""
+        current_language = get_language()
+        return [code for code, name in settings.LANGUAGES if not code == current_language][0]
+
     def test_setlang(self):
         """
         The set_language view can be used to change the session language.
 
         The user is redirected to the 'next' argument if provided.
         """
-        for lang_code, lang_name in settings.LANGUAGES:
-            post_data = dict(language=lang_code, next='/')
-            response = self.client.post('/i18n/setlang/', data=post_data)
-            self.assertRedirects(response, '/')
-            self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+        lang_code = self._get_inactive_language_code()
+        post_data = dict(language=lang_code, next='/')
+        response = self.client.post('/i18n/setlang/', post_data, HTTP_REFERER='/i_should_not_be_used/')
+        self.assertRedirects(response, '/')
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
 
     def test_setlang_unsafe_next(self):
         """
         The set_language view only redirects to the 'next' argument if it is
         "safe".
         """
-        lang_code, lang_name = settings.LANGUAGES[0]
+        lang_code = self._get_inactive_language_code()
         post_data = dict(language=lang_code, next='//unsafe/redirection/')
         response = self.client.post('/i18n/setlang/', data=post_data)
+        self.assertEqual(response.url, '/')
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+
+    def test_setlang_redirect_to_referer(self):
+        """
+        The set_language view redirects to the URL in the referer header when
+        there isn't a "next" parameter.
+        """
+        lang_code = self._get_inactive_language_code()
+        post_data = dict(language=lang_code)
+        response = self.client.post('/i18n/setlang/', post_data, HTTP_REFERER='/i18n/')
+        self.assertRedirects(response, '/i18n/', fetch_redirect_response=False)
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+
+    def test_setlang_default_redirect(self):
+        """
+        The set_language view redirects to '/' when there isn't a referer or
+        "next" parameter.
+        """
+        lang_code = self._get_inactive_language_code()
+        post_data = dict(language=lang_code)
+        response = self.client.post('/i18n/setlang/', post_data)
+        self.assertRedirects(response, '/')
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+
+    def test_setlang_performs_redirect_for_ajax_if_explicitly_requested(self):
+        """
+        The set_language view redirects to the "next" parameter for AJAX calls.
+        """
+        lang_code = self._get_inactive_language_code()
+        post_data = dict(language=lang_code, next='/')
+        response = self.client.post('/i18n/setlang/', post_data, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        self.assertRedirects(response, '/')
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+
+    def test_setlang_doesnt_perform_a_redirect_to_referer_for_ajax(self):
+        """
+        The set_language view doesn't redirect to the HTTP referer header for
+        AJAX calls.
+        """
+        lang_code = self._get_inactive_language_code()
+        post_data = dict(language=lang_code)
+        headers = {'HTTP_REFERER': '/', 'HTTP_X_REQUESTED_WITH': 'XMLHttpRequest'}
+        response = self.client.post('/i18n/setlang/', post_data, **headers)
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+
+    def test_setlang_doesnt_perform_a_default_redirect_for_ajax(self):
+        """
+        The set_language view returns 204 for AJAX calls by default.
+        """
+        lang_code = self._get_inactive_language_code()
+        post_data = dict(language=lang_code)
+        response = self.client.post('/i18n/setlang/', post_data, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+
+    def test_setlang_unsafe_next_for_ajax(self):
+        """
+        The fallback to root URL for the set_language view works for AJAX calls.
+        """
+        lang_code = self._get_inactive_language_code()
+        post_data = dict(language=lang_code, next='//unsafe/redirection/')
+        response = self.client.post('/i18n/setlang/', post_data, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
         self.assertEqual(response.url, '/')
         self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
 
@@ -164,6 +232,15 @@ class JsI18NTests(SimpleTestCase):
         with self.settings(LANGUAGE_CODE='fr'), override('fi'):
             response = self.client.get('/jsi18n/')
             self.assertContains(response, 'il faut le traduire')
+            self.assertNotContains(response, "Untranslated string")
+
+    def test_i18n_english_variant(self):
+        with override('en-gb'):
+            response = self.client.get('/jsi18n/')
+            self.assertIn(
+                '"this color is to be translated": "this colour is to be translated"',
+                response.context['catalog_str']
+            )
 
     def test_i18n_language_non_english_default(self):
         """
@@ -256,34 +333,14 @@ class JsI18NTestsMultiPackage(SimpleTestCase):
                     'este texto de app3 debe ser traducido')
 
 
-skip_selenium = not os.environ.get('DJANGO_SELENIUM_TESTS', False)
-
-
-@unittest.skipIf(skip_selenium, 'Selenium tests not requested')
 @override_settings(ROOT_URLCONF='view_tests.urls')
-class JavascriptI18nTests(LiveServerTestCase):
+class JavascriptI18nTests(SeleniumTestCase):
 
     # The test cases use fixtures & translations from these apps.
     available_apps = [
         'django.contrib.admin', 'django.contrib.auth',
         'django.contrib.contenttypes', 'view_tests',
     ]
-    webdriver_class = 'selenium.webdriver.firefox.webdriver.WebDriver'
-
-    @classmethod
-    def setUpClass(cls):
-        try:
-            cls.selenium = import_string(cls.webdriver_class)()
-        except Exception as e:
-            raise unittest.SkipTest('Selenium webdriver "%s" not installed or '
-                                    'not operational: %s' % (cls.webdriver_class, str(e)))
-        cls.selenium.implicitly_wait(10)
-        super(JavascriptI18nTests, cls).setUpClass()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.selenium.quit()
-        super(JavascriptI18nTests, cls).tearDownClass()
 
     @override_settings(LANGUAGE_CODE='de')
     def test_javascript_gettext(self):
@@ -311,11 +368,3 @@ class JavascriptI18nTests(LiveServerTestCase):
         self.assertEqual(elem.text, 'il faut traduire cette chaîne de caractères de app1')
         elem = self.selenium.find_element_by_id('app2string')
         self.assertEqual(elem.text, 'il faut traduire cette chaîne de caractères de app2')
-
-
-class JavascriptI18nChromeTests(JavascriptI18nTests):
-    webdriver_class = 'selenium.webdriver.chrome.webdriver.WebDriver'
-
-
-class JavascriptI18nIETests(JavascriptI18nTests):
-    webdriver_class = 'selenium.webdriver.ie.webdriver.WebDriver'

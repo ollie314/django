@@ -79,8 +79,6 @@ def model_to_dict(instance, fields=None, exclude=None):
     fields will be excluded from the returned dict, even if they are listed in
     the ``fields`` argument.
     """
-    # avoid a circular import
-    from django.db.models.fields.related import ManyToManyField
     opts = instance._meta
     data = {}
     for f in chain(opts.concrete_fields, opts.virtual_fields, opts.many_to_many):
@@ -90,7 +88,7 @@ def model_to_dict(instance, fields=None, exclude=None):
             continue
         if exclude and f.name in exclude:
             continue
-        if isinstance(f, ManyToManyField):
+        if f.many_to_many:
             # If the object doesn't have a primary key yet, just use an empty
             # list for its m2m fields. Calling f.value_from_object will raise
             # an exception.
@@ -148,6 +146,12 @@ def fields_for_model(model, fields=None, exclude=None, widgets=None,
                                if isinstance(f, ModelField)]
     for f in sorted(chain(opts.concrete_fields, sortable_virtual_fields, opts.many_to_many)):
         if not getattr(f, 'editable', False):
+            if (fields is not None and f.name in fields and
+                    (exclude is None or f.name not in exclude)):
+                raise FieldError(
+                    "'%s' cannot be specified for %s model form as it is a non-editable field" % (
+                        f.name, model.__name__)
+                )
             continue
         if fields is not None and f.name not in fields:
             continue
@@ -203,7 +207,13 @@ class ModelFormOptions(object):
 
 class ModelFormMetaclass(DeclarativeFieldsMetaclass):
     def __new__(mcs, name, bases, attrs):
-        formfield_callback = attrs.pop('formfield_callback', None)
+        base_formfield_callback = None
+        for b in bases:
+            if hasattr(b, 'Meta') and hasattr(b.Meta, 'formfield_callback'):
+                base_formfield_callback = b.Meta.formfield_callback
+                break
+
+        formfield_callback = attrs.pop('formfield_callback', base_formfield_callback)
 
         new_class = super(ModelFormMetaclass, mcs).__new__(mcs, name, bases, attrs)
 
@@ -376,11 +386,6 @@ class BaseModelForm(BaseForm):
 
         exclude = self._get_validation_exclusions()
 
-        try:
-            self.instance = construct_instance(self, self.instance, opts.fields, exclude)
-        except ValidationError as e:
-            self._update_errors(e)
-
         # Foreign Keys being used to represent inline relationships
         # are excluded from basic field value validation. This is for two
         # reasons: firstly, the value may not be supplied (#12507; the
@@ -391,6 +396,11 @@ class BaseModelForm(BaseForm):
         for name, field in self.fields.items():
             if isinstance(field, InlineForeignKeyField):
                 exclude.append(name)
+
+        try:
+            self.instance = construct_instance(self, self.instance, opts.fields, opts.exclude)
+        except ValidationError as e:
+            self._update_errors(e)
 
         try:
             self.instance.full_clean(exclude=exclude, validate_unique=False)
@@ -524,7 +534,8 @@ def modelform_factory(model, form=ModelForm, fields=None, exclude=None,
     if hasattr(form, 'Meta'):
         parent = (form.Meta, object)
     Meta = type(str('Meta'), parent, attrs)
-
+    if formfield_callback:
+        Meta.formfield_callback = staticmethod(formfield_callback)
     # Give this new form class a reasonable name.
     class_name = model.__name__ + str('Form')
 
@@ -552,6 +563,9 @@ class BaseModelFormSet(BaseFormSet):
     A ``FormSet`` for editing a queryset and/or adding new objects to it.
     """
     model = None
+
+    # Set of fields that must be unique among forms of this set.
+    unique_fields = set()
 
     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
                  queryset=None, **kwargs):
@@ -666,9 +680,11 @@ class BaseModelFormSet(BaseFormSet):
         for uclass, unique_check in all_unique_checks:
             seen_data = set()
             for form in valid_forms:
-                # get data for each field of each of unique_check
-                row_data = (form.cleaned_data[field]
-                            for field in unique_check if field in form.cleaned_data)
+                # Get the data for the set of fields that must be unique among the forms.
+                row_data = (
+                    field if field in self.unique_fields else form.cleaned_data[field]
+                    for field in unique_check if field in form.cleaned_data
+                )
                 # Reduce Model instances to their primary key values
                 row_data = tuple(d._get_pk_val() if hasattr(d, '_get_pk_val') else d
                                  for d in row_data)
@@ -831,8 +847,6 @@ def modelformset_factory(model, form=ModelForm, formfield_callback=None,
     Returns a FormSet class for the given Django model class.
     """
     meta = getattr(form, 'Meta', None)
-    if meta is None:
-        meta = type(str('Meta'), (object,), {})
     if (getattr(meta, 'fields', fields) is None and
             getattr(meta, 'exclude', exclude) is None):
         raise ImproperlyConfigured(
@@ -869,6 +883,7 @@ class BaseInlineFormSet(BaseModelFormSet):
             qs = queryset.filter(**{self.fk.name: self.instance})
         else:
             qs = queryset.none()
+        self.unique_fields = {self.fk.name}
         super(BaseInlineFormSet, self).__init__(data, files, prefix=prefix,
                                                 queryset=qs, **kwargs)
 

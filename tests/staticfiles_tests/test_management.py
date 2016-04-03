@@ -34,26 +34,21 @@ class TestNoFilesCreated(object):
         self.assertEqual(os.listdir(settings.STATIC_ROOT), [])
 
 
-class TestFindStatic(CollectionTestCase, TestDefaults):
+class TestFindStatic(TestDefaults, CollectionTestCase):
     """
     Test ``findstatic`` management command.
     """
     def _get_file(self, filepath):
-        out = six.StringIO()
-        call_command('findstatic', filepath, all=False, verbosity=0, stdout=out)
-        out.seek(0)
-        lines = [l.strip() for l in out.readlines()]
-        with codecs.open(force_text(lines[0].strip()), "r", "utf-8") as f:
+        path = call_command('findstatic', filepath, all=False, verbosity=0, stdout=six.StringIO())
+        with codecs.open(force_text(path), "r", "utf-8") as f:
             return f.read()
 
     def test_all_files(self):
         """
         Test that findstatic returns all candidate files if run without --first and -v1.
         """
-        out = six.StringIO()
-        call_command('findstatic', 'test/file.txt', verbosity=1, stdout=out)
-        out.seek(0)
-        lines = [l.strip() for l in out.readlines()]
+        result = call_command('findstatic', 'test/file.txt', verbosity=1, stdout=six.StringIO())
+        lines = [l.strip() for l in result.split('\n')]
         self.assertEqual(len(lines), 3)  # three because there is also the "Found <file> here" line
         self.assertIn('project', force_text(lines[1]))
         self.assertIn('apps', force_text(lines[2]))
@@ -62,10 +57,8 @@ class TestFindStatic(CollectionTestCase, TestDefaults):
         """
         Test that findstatic returns all candidate files if run without --first and -v0.
         """
-        out = six.StringIO()
-        call_command('findstatic', 'test/file.txt', verbosity=0, stdout=out)
-        out.seek(0)
-        lines = [l.strip() for l in out.readlines()]
+        result = call_command('findstatic', 'test/file.txt', verbosity=0, stdout=six.StringIO())
+        lines = [l.strip() for l in result.split('\n')]
         self.assertEqual(len(lines), 2)
         self.assertIn('project', force_text(lines[0]))
         self.assertIn('apps', force_text(lines[1]))
@@ -75,10 +68,8 @@ class TestFindStatic(CollectionTestCase, TestDefaults):
         Test that findstatic returns all candidate files if run without --first and -v2.
         Also, test that findstatic returns the searched locations with -v2.
         """
-        out = six.StringIO()
-        call_command('findstatic', 'test/file.txt', verbosity=2, stdout=out)
-        out.seek(0)
-        lines = [l.strip() for l in out.readlines()]
+        result = call_command('findstatic', 'test/file.txt', verbosity=2, stdout=six.StringIO())
+        lines = [l.strip() for l in result.split('\n')]
         self.assertIn('project', force_text(lines[1]))
         self.assertIn('apps', force_text(lines[2]))
         self.assertIn("Looking in the following locations:", force_text(lines[3]))
@@ -143,7 +134,7 @@ class TestCollectionHelpSubcommand(AdminScriptTestCase):
         self.assertNoOutput(err)
 
 
-class TestCollection(CollectionTestCase, TestDefaults):
+class TestCollection(TestDefaults, CollectionTestCase):
     """
     Test ``collectstatic`` management command.
     """
@@ -179,8 +170,13 @@ class TestCollectionClear(CollectionTestCase):
         shutil.rmtree(six.text_type(settings.STATIC_ROOT))
         super(TestCollectionClear, self).run_collectstatic(clear=True)
 
+    @override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.PathNotImplementedStorage')
+    def test_handle_path_notimplemented(self):
+        self.run_collectstatic()
+        self.assertFileNotFound('cleared.txt')
 
-class TestCollectionExcludeNoDefaultIgnore(CollectionTestCase, TestDefaults):
+
+class TestCollectionExcludeNoDefaultIgnore(TestDefaults, CollectionTestCase):
     """
     Test ``--exclude-dirs`` and ``--no-default-ignore`` options of the
     ``collectstatic`` management command.
@@ -199,7 +195,7 @@ class TestCollectionExcludeNoDefaultIgnore(CollectionTestCase, TestDefaults):
         self.assertFileContains('test/CVS', 'should be ignored')
 
 
-class TestCollectionDryRun(CollectionTestCase, TestNoFilesCreated):
+class TestCollectionDryRun(TestNoFilesCreated, CollectionTestCase):
     """
     Test ``--dry-run`` option for ``collectstatic`` management command.
     """
@@ -320,7 +316,7 @@ class TestCollectionOverwriteWarning(CollectionTestCase):
 
 
 @override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.DummyStorage')
-class TestCollectionNonLocalStorage(CollectionTestCase, TestNoFilesCreated):
+class TestCollectionNonLocalStorage(TestNoFilesCreated, CollectionTestCase):
     """
     Tests for #15035
     """
@@ -328,7 +324,7 @@ class TestCollectionNonLocalStorage(CollectionTestCase, TestNoFilesCreated):
 
 
 @unittest.skipUnless(symlinks_supported(), "Must be able to symlink to run this test.")
-class TestCollectionLinks(CollectionTestCase, TestDefaults):
+class TestCollectionLinks(TestDefaults, CollectionTestCase):
     """
     Test ``--link`` option for ``collectstatic`` management command.
 

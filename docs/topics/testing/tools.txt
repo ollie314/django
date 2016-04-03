@@ -334,13 +334,6 @@ Use the ``django.test.Client`` class to make requests.
         ``login()`` method to simulate the effect of a user logging into the
         site.
 
-        Inactive users (:attr:`is_active=False
-        <django.contrib.auth.models.User.is_active>`) are not permitted to
-        login as this method is meant to be equivalent to the
-        :func:`~django.contrib.auth.login` view which uses
-        :class:`~django.contrib.auth.forms.AuthenticationForm` and therefore
-        defaults to rejecting users who are inactive.
-
         After you call this method, the test client will have all the cookies
         and session data required to pass any login-based tests that may form
         part of a view.
@@ -377,6 +370,12 @@ Use the ``django.test.Client`` class to make requests.
         store a correctly hashed password. Alternatively, you can use the
         :meth:`~django.contrib.auth.models.UserManager.create_user` helper
         method to create a new user with a correctly hashed password.
+
+        .. versionchanged:: 1.10
+
+            In previous versions, inactive users (:attr:`is_active=False
+            <django.contrib.auth.models.User.is_active>`) were not permitted
+            to login.
 
     .. method:: Client.force_login(user, backend=None)
 
@@ -617,15 +616,19 @@ Normal Python unit test classes extend a base class of
 
    Hierarchy of Django unit testing classes
 
+Converting a normal :class:`unittest.TestCase` to any of the subclasses is
+easy: change the base class of your test from ``unittest.TestCase`` to the
+subclass. All of the standard Python unit test functionality will be available,
+and it will be augmented with some useful additions as described in each
+section below.
+
 ``SimpleTestCase``
 ------------------
 
 .. class:: SimpleTestCase()
 
-A thin subclass of :class:`unittest.TestCase`, it extends it with some basic
-functionality like:
+A subclass of :class:`unittest.TestCase` that adds this functionality:
 
-* Saving and restoring the Python warning machinery state.
 * Some useful assertions like:
 
   * Checking that a callable :meth:`raises a certain exception
@@ -648,17 +651,8 @@ functionality like:
 * The ability to run tests with :ref:`modified settings <overriding-settings>`.
 * Using the :attr:`~SimpleTestCase.client` :class:`~django.test.Client`.
 
-If you need any of the other more complex and heavyweight Django-specific
-features like:
-
-* Testing or using the ORM.
-* Database :attr:`~TransactionTestCase.fixtures`.
-* Test :ref:`skipping based on database backend features <skipping-tests>`.
-* The remaining specialized :meth:`assert*
-  <TransactionTestCase.assertQuerysetEqual>` methods.
-
-then you should use :class:`~django.test.TransactionTestCase` or
-:class:`~django.test.TestCase` instead.
+If your tests make any database queries, use subclasses
+:class:`~django.test.TransactionTestCase` or :class:`~django.test.TestCase`.
 
 .. attribute:: SimpleTestCase.allow_database_queries
 
@@ -670,8 +664,6 @@ then you should use :class:`~django.test.TransactionTestCase` or
     aren't concerned about this problem, you can disable this behavior by
     setting the ``allow_database_queries`` class attribute to ``True`` on
     your test class.
-
-``SimpleTestCase`` inherits from ``unittest.TestCase``.
 
 .. warning::
 
@@ -706,12 +698,23 @@ then you should use :class:`~django.test.TransactionTestCase` or
 
 .. class:: TransactionTestCase()
 
-Django's ``TestCase`` class (described below) makes use of database transaction
-facilities to speed up the process of resetting the database to a known state
-at the beginning of each test. A consequence of this, however, is that some
-database behaviors cannot be tested within a Django ``TestCase`` class. For
-instance, you cannot test that a block of code is executing within a
-transaction, as is required when using
+``TransactionTestCase`` inherits from :class:`~django.test.SimpleTestCase` to
+add some database-specific features:
+
+* Resetting the database to a known state at the beginning of each test to
+  ease testing and using the ORM.
+* Database :attr:`~TransactionTestCase.fixtures`.
+* Test :ref:`skipping based on database backend features <skipping-tests>`.
+* The remaining specialized :meth:`assert*
+  <TransactionTestCase.assertQuerysetEqual>` methods.
+
+Django's :class:`TestCase` class is a more commonly used subclass of
+``TransactionTestCase`` that makes use of database transaction facilities
+to speed up the process of resetting the database to a known state at the
+beginning of each test. A consequence of this, however, is that some database
+behaviors cannot be tested within a Django ``TestCase`` class. For instance,
+you cannot test that a block of code is executing within a transaction, as is
+required when using
 :meth:`~django.db.models.query.QuerySet.select_for_update()`. In those cases,
 you should use ``TransactionTestCase``.
 
@@ -740,38 +743,30 @@ to test the effects of commit and rollback:
   this) you can set ``serialized_rollback = True`` inside the
   ``TestCase`` body.
 
-``TransactionTestCase`` inherits from :class:`~django.test.SimpleTestCase`.
-
 ``TestCase``
 ------------
 
 .. class:: TestCase()
 
-This class provides some additional capabilities that can be useful for testing
-websites.
+This is the most common class to use for writing tests in Django. It inherits
+from :class:`TransactionTestCase` (and by extension :class:`SimpleTestCase`).
+If your Django application doesn't use a database, use :class:`SimpleTestCase`.
 
-Converting a normal :class:`unittest.TestCase` to a Django :class:`TestCase` is
-easy: Just change the base class of your test from ``'unittest.TestCase'`` to
-``'django.test.TestCase'``. All of the standard Python unit test functionality
-will continue to be available, but it will be augmented with some useful
-additions, including:
+The class:
 
-* Automatic loading of fixtures.
-
-* Wraps the tests within two nested ``atomic`` blocks: one for the whole class
-  and one for each test.
+* Wraps the tests within two nested :func:`~django.db.transaction.atomic`
+  blocks: one for the whole class and one for each test. Therefore, if you want
+  to test some specific database transaction behavior, use
+  :class:`TransactionTestCase`.
 
 * Checks deferrable database constraints at the end of each test.
-
-* Creates a TestClient instance.
-
-* Django-specific assertions for testing for things like redirection and form
-  errors.
 
 .. versionchanged:: 1.10
 
     The check for deferrable database constraints at the end of each test was
     added.
+
+It also provides an additional method:
 
 .. classmethod:: TestCase.setUpTestData()
 
@@ -807,14 +802,6 @@ additions, including:
     at the class level will persist between test methods. If you do need to
     modify them, you could reload them in the ``setUp()`` method with
     :meth:`~django.db.models.Model.refresh_from_db`, for example.
-
-.. warning::
-
-    If you want to test some specific database transaction behavior, you should
-    use ``TransactionTestCase``, as ``TestCase`` wraps test execution within an
-    :func:`~django.db.transaction.atomic()` block.
-
-``TestCase`` inherits from :class:`~django.test.TransactionTestCase`.
 
 .. _live-test-server:
 
@@ -1621,6 +1608,60 @@ your test suite.
         with self.assertNumQueries(2):
             Person.objects.create(name="Aaron")
             Person.objects.create(name="Daniel")
+
+.. _topics-tagging-tests:
+
+Tagging tests
+-------------
+
+.. versionadded:: 1.10
+
+You can tag your tests so you can easily run a particular subset. For example,
+you might label fast or slow tests::
+
+    from django.test import tag
+
+    class SampleTestCase(TestCase):
+
+        @tag('fast')
+        def test_fast(self):
+            ...
+
+        @tag('slow')
+        def test_slow(self):
+            ...
+
+        @tag('slow', 'core')
+        def test_slow_but_core(self):
+            ...
+
+You can also tag a test case::
+
+    @tag('slow', 'core')
+    class SampleTestCase(TestCase):
+        ...
+
+Then you can choose which tests to run. For example, to run only fast tests:
+
+.. code-block:: console
+
+    $ ./manage.py test --tag=fast
+
+Or to run fast tests and the core one (even though it's slow):
+
+.. code-block:: console
+
+    $ ./manage.py test --tag=fast --tag=core
+
+You can also exclude tests by tag. To run core tests if they are not slow:
+
+.. code-block:: console
+
+    $ ./manage.py test --tag=core --exclude-tag=slow
+
+:option:`test --exclude-tag` has precedence over :option:`test --tag`, so if a
+test has two tags and you select one of them and exclude the other, the test
+won't be run.
 
 .. _topics-testing-email:
 

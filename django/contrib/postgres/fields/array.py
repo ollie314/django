@@ -28,6 +28,10 @@ class ArrayField(Field):
         if self.size:
             self.default_validators = self.default_validators[:]
             self.default_validators.append(ArrayMaxLengthValidator(self.size))
+        # For performance, only add a from_db_value() method if the base field
+        # implements it.
+        if hasattr(self.base_field, 'from_db_value'):
+            self.from_db_value = self._from_db_value
         super(ArrayField, self).__init__(**kwargs)
 
     @property
@@ -80,7 +84,7 @@ class ArrayField(Field):
 
     def get_db_prep_value(self, value, connection, prepared=False):
         if isinstance(value, list) or isinstance(value, tuple):
-            return [self.base_field.get_db_prep_value(i, connection, prepared) for i in value]
+            return [self.base_field.get_db_prep_value(i, connection, prepared=False) for i in value]
         return value
 
     def deconstruct(self):
@@ -100,14 +104,25 @@ class ArrayField(Field):
             value = [self.base_field.to_python(val) for val in vals]
         return value
 
+    def _from_db_value(self, value, expression, connection, context):
+        if value is None:
+            return value
+        return [
+            self.base_field.from_db_value(item, expression, connection, context)
+            for item in value
+        ]
+
     def value_to_string(self, obj):
         values = []
         vals = self.value_from_object(obj)
         base_field = self.base_field
 
         for val in vals:
-            obj = AttributeSetter(base_field.attname, val)
-            values.append(base_field.value_to_string(obj))
+            if val is None:
+                values.append(None)
+            else:
+                obj = AttributeSetter(base_field.attname, val)
+                values.append(base_field.value_to_string(obj))
         return json.dumps(values)
 
     def get_transform(self, name):

@@ -354,11 +354,12 @@ Specifies the database to flush. Defaults to ``default``.
 ``inspectdb``
 -------------
 
-.. django-admin:: inspectdb
+.. django-admin:: inspectdb [table [table ...]]
 
 Introspects the database tables in the database pointed-to by the
 :setting:`NAME` setting and outputs a Django model module (a ``models.py``
-file) to standard output.
+file) to standard output. You may choose what tables to inspect by passing
+their names as arguments.
 
 Use this if you have a legacy database with which you'd like to use Django.
 The script will inspect the database and create a model for each table within
@@ -405,6 +406,11 @@ modification, and deletion. If you do want to allow Django to manage the
 table's lifecycle, you'll need to change the
 :attr:`~django.db.models.Options.managed` option to ``True`` (or simply remove
 it because ``True`` is its default value).
+
+.. versionadded:: 1.10
+
+    Support for the ``table`` argument(s) to choose what tables should be
+    inspected was added.
 
 .. django-admin-option:: --database DATABASE
 
@@ -1348,6 +1354,20 @@ don't.
     in order to exchange them between processes. See
     :ref:`python:pickle-picklable` for details.
 
+.. option:: --tag TAGS
+
+.. versionadded:: 1.10
+
+Runs only tests :ref:`marked with the specified tags <topics-tagging-tests>`.
+May be specified multiple times and combined with :option:`test --exclude-tag`.
+
+.. option:: --exclude-tag EXCLUDE_TAGS
+
+.. versionadded:: 1.10
+
+Excludes tests :ref:`marked with the specified tags <topics-tagging-tests>`.
+May be specified multiple times and combined with :option:`test --tag`.
+
 ``testserver``
 --------------
 
@@ -1746,19 +1766,28 @@ Running management commands from your code
 To call a management command from code use ``call_command``.
 
 ``name``
-  the name of the command to call.
+  the name of the command to call or a command object. Passing the name is
+  preferred unless the object is required for testing.
 
 ``*args``
-  a list of arguments accepted by the command.
+  a list of arguments accepted by the command. Arguments are passed to the
+  argument parser, so you can use the same style as you would on the command
+  line. For example, ``call_command('flush', 'verbosity=0')``.
 
 ``**options``
-  named options accepted on the command-line.
+  named options accepted on the command-line. Options are passed to the command
+  without triggering the argument parser, which means you'll need to pass the
+  correct type. For example, ``call_command('flush', verbosity=0)`` (zero must
+  be an integer rather than a string).
 
 Examples::
 
       from django.core import management
+      from django.core.management.commands import loaddata
+
       management.call_command('flush', verbosity=0, interactive=False)
       management.call_command('loaddata', 'test_data', verbosity=0)
+      management.call_command(loaddata.Command(), 'test_data', verbosity=0)
 
 Note that command options that take no arguments are passed as keywords
 with ``True`` or ``False``, as you can see with the ``interactive`` option above.
@@ -1778,6 +1807,15 @@ Named arguments can be passed by using either one of the following syntaxes::
 Command options which take multiple options are passed a list::
 
       management.call_command('dumpdata', exclude=['contenttypes', 'auth'])
+
+The return value of the ``call_command()`` function is the same as the return
+value of the ``handle()`` method of the command.
+
+.. versionchanged:: 1.10
+
+    ``call_command()`` now returns the value received from the
+    ``command.handle()`` method. It now also accepts a command object as the
+    first argument.
 
 Output redirection
 ==================

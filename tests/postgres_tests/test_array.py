@@ -15,7 +15,7 @@ from . import PostgreSQLTestCase
 from .models import (
     ArrayFieldSubclass, CharArrayModel, DateTimeArrayModel, IntegerArrayModel,
     NestedIntegerArrayModel, NullableIntegerArrayModel, OtherTypesArrayModel,
-    PostgreSQLModel,
+    PostgreSQLModel, Tag,
 )
 
 try:
@@ -92,12 +92,24 @@ class TestSaveLoad(PostgreSQLTestCase):
             ips=['192.168.0.1', '::1'],
             uuids=[uuid.uuid4()],
             decimals=[decimal.Decimal(1.25), 1.75],
+            tags=[Tag(1), Tag(2), Tag(3)],
         )
         instance.save()
         loaded = OtherTypesArrayModel.objects.get()
         self.assertEqual(instance.ips, loaded.ips)
         self.assertEqual(instance.uuids, loaded.uuids)
         self.assertEqual(instance.decimals, loaded.decimals)
+        self.assertEqual(instance.tags, loaded.tags)
+
+    def test_null_from_db_value_handling(self):
+        instance = OtherTypesArrayModel.objects.create(
+            ips=['192.168.0.1', '::1'],
+            uuids=[uuid.uuid4()],
+            decimals=[decimal.Decimal(1.25), 1.75],
+            tags=None,
+        )
+        instance.refresh_from_db()
+        self.assertIsNone(instance.tags)
 
     def test_model_set_on_base_field(self):
         instance = IntegerArrayModel()
@@ -306,11 +318,13 @@ class TestOtherTypesExactQuerying(PostgreSQLTestCase):
         self.ips = ['192.168.0.1', '::1']
         self.uuids = [uuid.uuid4()]
         self.decimals = [decimal.Decimal(1.25), 1.75]
+        self.tags = [Tag(1), Tag(2), Tag(3)]
         self.objs = [
             OtherTypesArrayModel.objects.create(
                 ips=self.ips,
                 uuids=self.uuids,
                 decimals=self.decimals,
+                tags=self.tags,
             )
         ]
 
@@ -329,6 +343,12 @@ class TestOtherTypesExactQuerying(PostgreSQLTestCase):
     def test_exact_decimals(self):
         self.assertSequenceEqual(
             OtherTypesArrayModel.objects.filter(decimals=self.decimals),
+            self.objs
+        )
+
+    def test_exact_tags(self):
+        self.assertSequenceEqual(
+            OtherTypesArrayModel.objects.filter(tags=self.tags),
             self.objs
         )
 
@@ -448,17 +468,17 @@ class TestMigrations(TransactionTestCase):
 
 class TestSerialization(PostgreSQLTestCase):
     test_data = (
-        '[{"fields": {"field": "[\\"1\\", \\"2\\"]"}, "model": "postgres_tests.integerarraymodel", "pk": null}]'
+        '[{"fields": {"field": "[\\"1\\", \\"2\\", null]"}, "model": "postgres_tests.integerarraymodel", "pk": null}]'
     )
 
     def test_dumping(self):
-        instance = IntegerArrayModel(field=[1, 2])
+        instance = IntegerArrayModel(field=[1, 2, None])
         data = serializers.serialize('json', [instance])
         self.assertEqual(json.loads(data), json.loads(self.test_data))
 
     def test_loading(self):
         instance = list(serializers.deserialize('json', self.test_data))[0].object
-        self.assertEqual(instance.field, [1, 2])
+        self.assertEqual(instance.field, [1, 2, None])
 
 
 class TestValidation(PostgreSQLTestCase):
@@ -642,6 +662,20 @@ class TestSplitFormField(PostgreSQLTestCase):
         form = SplitForm(data)
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.cleaned_data, {'array': ['a', '', 'b']})
+
+    def test_remove_trailing_nulls_not_required(self):
+        class SplitForm(forms.Form):
+            array = SplitArrayField(
+                forms.CharField(required=False),
+                size=2,
+                remove_trailing_nulls=True,
+                required=False,
+            )
+
+        data = {'array_0': '', 'array_1': ''}
+        form = SplitForm(data)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data, {'array': []})
 
     def test_required_field(self):
         class SplitForm(forms.Form):

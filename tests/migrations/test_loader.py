@@ -2,7 +2,7 @@ from __future__ import unicode_literals
 
 from unittest import skipIf
 
-from django.db import connection, connections
+from django.db import ConnectionHandler, connection, connections
 from django.db.migrations.exceptions import AmbiguityError, NodeNotFoundError
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
@@ -202,11 +202,29 @@ class LoaderTests(TestCase):
         self.assertEqual(migration_loader.migrated_apps, set())
         self.assertEqual(migration_loader.unmigrated_apps, {'migrated_app'})
 
+    @override_settings(
+        INSTALLED_APPS=['migrations.migrations_test_apps.migrated_app'],
+    )
+    def test_disable_migrations(self):
+        connections = ConnectionHandler({
+            'default': {
+                'NAME': ':memory:',
+                'ENGINE': 'django.db.backends.sqlite3',
+                'TEST': {
+                    'MIGRATE': False,
+                },
+            },
+        })
+        migration_loader = MigrationLoader(connections['default'])
+        self.assertEqual(migration_loader.migrated_apps, set())
+        self.assertEqual(migration_loader.unmigrated_apps, {'migrated_app'})
+
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations_squashed"})
     def test_loading_squashed(self):
         "Tests loading a squashed migration"
         migration_loader = MigrationLoader(connection)
         recorder = MigrationRecorder(connection)
+        self.addCleanup(recorder.flush)
         # Loading with nothing applied should just give us the one node
         self.assertEqual(
             len([x for x in migration_loader.graph.nodes if x[0] == "migrations"]),
@@ -219,7 +237,6 @@ class LoaderTests(TestCase):
             len([x for x in migration_loader.graph.nodes if x[0] == "migrations"]),
             2,
         )
-        recorder.flush()
 
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations_squashed_complex"})
     def test_loading_squashed_complex(self):
@@ -227,6 +244,7 @@ class LoaderTests(TestCase):
 
         loader = MigrationLoader(connection)
         recorder = MigrationRecorder(connection)
+        self.addCleanup(recorder.flush)
 
         def num_nodes():
             plan = set(loader.graph.forwards_plan(('migrations', '7_auto')))
@@ -266,8 +284,6 @@ class LoaderTests(TestCase):
         recorder.record_applied("migrations", "7_auto")
         loader.build_graph()
         self.assertEqual(num_nodes(), 0)
-
-        recorder.flush()
 
     @override_settings(MIGRATION_MODULES={
         "app1": "migrations.test_migrations_squashed_complex_multi_apps.app1",
@@ -321,6 +337,7 @@ class LoaderTests(TestCase):
 
         loader = MigrationLoader(connection)
         recorder = MigrationRecorder(connection)
+        self.addCleanup(recorder.flush)
 
         def num_nodes():
             plan = set(loader.graph.forwards_plan(('migrations', '7_auto')))
@@ -365,5 +382,3 @@ class LoaderTests(TestCase):
         recorder.record_applied("migrations", "7_auto")
         loader.build_graph()
         self.assertEqual(num_nodes(), 0)
-
-        recorder.flush()

@@ -67,10 +67,8 @@ class CommonMiddlewareTest(SimpleTestCase):
         APPEND_SLASH should redirect slashless URLs to a valid pattern.
         """
         request = self.rf.get('/slash')
-        response = HttpResponseNotFound()
-        r = CommonMiddleware().process_response(request, response)
+        r = CommonMiddleware().process_request(request)
         self.assertEqual(r.status_code, 301)
-        self.assertEqual(r.url, '/slash/')
 
     @override_settings(APPEND_SLASH=True)
     def test_append_slash_redirect_querystring(self):
@@ -301,9 +299,6 @@ class CommonMiddlewareTest(SimpleTestCase):
         request = self.rf.get('/slash')
         request.META['QUERY_STRING'] = force_str('drink=café')
         r = CommonMiddleware().process_request(request)
-        self.assertIsNone(r)
-        response = HttpResponseNotFound()
-        r = CommonMiddleware().process_response(request, response)
         self.assertEqual(r.status_code, 301)
 
     def test_response_redirect_class(self):
@@ -414,6 +409,20 @@ class BrokenLinkEmailsMiddlewareTest(SimpleTestCase):
 
     def test_referer_equal_to_requested_url_on_another_domain(self):
         self.req.META['HTTP_REFERER'] = 'http://anotherserver%s' % self.req.path
+        BrokenLinkEmailsMiddleware().process_response(self.req, self.resp)
+        self.assertEqual(len(mail.outbox), 1)
+
+    @override_settings(APPEND_SLASH=True)
+    def test_referer_equal_to_requested_url_without_trailing_slash_when_append_slash_is_set(self):
+        self.req.path = self.req.path_info = '/regular_url/that/does/not/exist/'
+        self.req.META['HTTP_REFERER'] = self.req.path_info[:-1]
+        BrokenLinkEmailsMiddleware().process_response(self.req, self.resp)
+        self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(APPEND_SLASH=False)
+    def test_referer_equal_to_requested_url_without_trailing_slash_when_append_slash_is_unset(self):
+        self.req.path = self.req.path_info = '/regular_url/that/does/not/exist/'
+        self.req.META['HTTP_REFERER'] = self.req.path_info[:-1]
         BrokenLinkEmailsMiddleware().process_response(self.req, self.resp)
         self.assertEqual(len(mail.outbox), 1)
 

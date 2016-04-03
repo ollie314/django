@@ -1326,11 +1326,17 @@ Django provides two mechanisms to internationalize URL patterns:
 Language prefix in URL patterns
 -------------------------------
 
-.. function:: i18n_patterns(*pattern_list)
+.. function:: i18n_patterns(*urls, prefix_default_language=True)
 
-This function can be used in your root URLconf and Django will automatically
+This function can be used in a root URLconf and Django will automatically
 prepend the current active language code to all url patterns defined within
-:func:`~django.conf.urls.i18n.i18n_patterns`. Example URL patterns::
+:func:`~django.conf.urls.i18n.i18n_patterns`.
+
+Setting ``prefix_default_language`` to ``False`` removes the prefix from the
+default language (:setting:`LANGUAGE_CODE`). This can be useful when adding
+translations to existing site so that the current URLs won't change.
+
+Example URL patterns::
 
     from django.conf.urls import include, url
     from django.conf.urls.i18n import i18n_patterns
@@ -1371,11 +1377,32 @@ function. Example::
     >>> reverse('news:detail', kwargs={'slug': 'news-slug'})
     '/nl/news/news-slug/'
 
+With ``prefix_default_language=False`` and  ``LANGUAGE_CODE='en'``, the URLs
+will be::
+
+    >>> activate('en')
+    >>> reverse('news:index')
+    '/news/'
+
+    >>> activate('nl')
+    >>> reverse('news:index')
+    '/nl/news/'
+
+.. versionadded:: 1.10
+
+    The ``prefix_default_language`` parameter was added.
+
 .. warning::
 
-    :func:`~django.conf.urls.i18n.i18n_patterns` is only allowed in your root
+    :func:`~django.conf.urls.i18n.i18n_patterns` is only allowed in a root
     URLconf. Using it within an included URLconf will throw an
     :exc:`~django.core.exceptions.ImproperlyConfigured` exception.
+
+.. versionchanged:: 1.10
+
+    In older version, using ``i18n_patterns`` in a root URLconf different from
+    :setting:`ROOT_URLCONF` by setting :attr:`request.urlconf
+    <django.http.HttpRequest.urlconf>` wasn't supported.
 
 .. warning::
 
@@ -1761,14 +1788,21 @@ saves the language choice in the user's session. Otherwise, it saves the
 language choice in a cookie that is by default named ``django_language``.
 (The name can be changed through the :setting:`LANGUAGE_COOKIE_NAME` setting.)
 
-After setting the language choice, Django redirects the user, following this
-algorithm:
+After setting the language choice, Django looks for a ``next`` parameter in the
+``POST`` or ``GET`` data. If that is found and Django considers it to be a safe
+URL (i.e. it doesn't point to a different host and uses a safe scheme), a
+redirect to that URL will be performed. Otherwise, Django may fall back to
+redirecting the user to the URL from the ``Referer`` header or, if it is not
+set, to ``/``, depending on the nature of the request:
 
-* Django looks for a ``next`` parameter in the ``POST`` data.
-* If that doesn't exist, or is empty, Django tries the URL in the
-  ``Referrer`` header.
-* If that's empty -- say, if a user's browser suppresses that header --
-  then the user will be redirected to ``/`` (the site root) as a fallback.
+* For AJAX requests, the fallback will be performed only if the ``next``
+  parameter was set. Otherwise a 204 status code (No Content) will be returned.
+* For non-AJAX requests, the fallback will always be performed.
+
+.. versionchanged:: 1.10
+
+    Returning a 204 status code for AJAX requests when no redirect is specified
+    is new.
 
 Here's example HTML template code:
 

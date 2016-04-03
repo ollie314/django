@@ -3,7 +3,7 @@ from __future__ import unicode_literals
 from datetime import date
 
 from django.contrib.auth import (
-    BACKEND_SESSION_KEY, SESSION_KEY, authenticate, get_user,
+    BACKEND_SESSION_KEY, SESSION_KEY, authenticate, get_user, signals,
 )
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.hashers import MD5PasswordHasher
@@ -15,7 +15,10 @@ from django.test import (
     SimpleTestCase, TestCase, modify_settings, override_settings,
 )
 
-from .models import CustomPermissionsUser, CustomUser, ExtensionUser, UUIDUser
+from .models import (
+    CustomPermissionsUser, CustomUser, CustomUserWithoutIsActiveField,
+    ExtensionUser, UUIDUser,
+)
 
 
 class CountingMD5PasswordHasher(MD5PasswordHasher):
@@ -200,18 +203,34 @@ class ModelBackendTest(BaseModelBackendTest, TestCase):
     Tests for the ModelBackend using the default User model.
     """
     UserModel = User
+    user_credentials = {'username': 'test', 'password': 'test'}
 
     def create_users(self):
-        self.user = User.objects.create_user(
-            username='test',
-            email='test@example.com',
-            password='test',
-        )
+        self.user = User.objects.create_user(email='test@example.com', **self.user_credentials)
         self.superuser = User.objects.create_superuser(
             username='test2',
             email='test2@example.com',
             password='test',
         )
+
+    def test_authenticate_inactive(self):
+        """
+        An inactive user can't authenticate.
+        """
+        self.assertEqual(authenticate(**self.user_credentials), self.user)
+        self.user.is_active = False
+        self.user.save()
+        self.assertIsNone(authenticate(**self.user_credentials))
+
+    @override_settings(AUTH_USER_MODEL='auth_tests.CustomUserWithoutIsActiveField')
+    def test_authenticate_user_without_is_active_field(self):
+        """
+        A custom user without an `is_active` field is allowed to authenticate.
+        """
+        user = CustomUserWithoutIsActiveField.objects._create_user(
+            username='test', email='test@example.com', password='test',
+        )
+        self.assertEqual(authenticate(username='test', password='test'), user)
 
 
 @override_settings(AUTH_USER_MODEL='auth_tests.ExtensionUser')
@@ -475,12 +494,21 @@ class PermissionDeniedBackendTest(TestCase):
 
     def setUp(self):
         self.user1 = User.objects.create_user('test', 'test@example.com', 'test')
-        self.user1.save()
+        self.user_login_failed = []
+        signals.user_login_failed.connect(self.user_login_failed_listener)
+
+    def tearDown(self):
+        signals.user_login_failed.disconnect(self.user_login_failed_listener)
+
+    def user_login_failed_listener(self, sender, credentials, **kwargs):
+        self.user_login_failed.append(credentials)
 
     @modify_settings(AUTHENTICATION_BACKENDS={'prepend': backend})
     def test_permission_denied(self):
         "user is not authenticated after a backend raises permission denied #2550"
         self.assertEqual(authenticate(username='test', password='test'), None)
+        # user_login_failed signal is sent.
+        self.assertEqual(self.user_login_failed, [{'password': '********************', 'username': 'test'}])
 
     @modify_settings(AUTHENTICATION_BACKENDS={'append': backend})
     def test_authenticates(self):
@@ -667,3 +695,29 @@ class SelectingBackendTests(TestCase):
         user = User.objects.create_user(self.username, 'email', self.password)
         self.client._login(user, self.other_backend)
         self.assertBackendInSession(self.other_backend)
+
+
+@override_settings(AUTHENTICATION_BACKENDS=['django.contrib.auth.backends.AllowAllUsersModelBackend'])
+class AllowAllUsersModelBackendTest(TestCase):
+    """
+    Inactive users may authenticate with the AllowAllUsersModelBackend.
+    """
+    user_credentials = {'username': 'test', 'password': 'test'}
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
+            email='test@example.com', is_active=False,
+            **cls.user_credentials
+        )
+
+    def test_authenticate(self):
+        self.assertFalse(self.user.is_active)
+        self.assertEqual(authenticate(**self.user_credentials), self.user)
+
+    def test_get_user(self):
+        self.client.force_login(self.user)
+        request = HttpRequest()
+        request.session = self.client.session
+        user = get_user(request)
+        self.assertEqual(user, self.user)
