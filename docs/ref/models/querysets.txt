@@ -641,7 +641,7 @@ achieve that, use ``values_list()`` followed by a ``get()`` call::
 specific use case: retrieving a subset of data without the overhead of creating
 a model instance. This metaphor falls apart when dealing with many-to-many and
 other multivalued relations (such as the one-to-many relation of a reverse
-foreign key) because the the "one row, one object" assumption doesn't hold.
+foreign key) because the "one row, one object" assumption doesn't hold.
 
 For example, notice the behavior when querying across a
 :class:`~django.db.models.ManyToManyField`::
@@ -921,8 +921,10 @@ For example, suppose you have these models::
         toppings = models.ManyToManyField(Topping)
 
         def __str__(self):              # __unicode__ on Python 2
-            return "%s (%s)" % (self.name, ", ".join(topping.name
-                                                     for topping in self.toppings.all()))
+            return "%s (%s)" % (
+                self.name,
+                ", ".join(topping.name or topping in self.toppings.all()),
+            )
 
 and run::
 
@@ -1669,8 +1671,11 @@ This is meant as a shortcut to boilerplatish code. For example::
 This pattern gets quite unwieldy as the number of fields in a model goes up.
 The above example can be rewritten using ``get_or_create()`` like so::
 
-    obj, created = Person.objects.get_or_create(first_name='John', last_name='Lennon',
-                      defaults={'birthday': date(1940, 10, 9)})
+    obj, created = Person.objects.get_or_create(
+        first_name='John',
+        last_name='Lennon',
+        defaults={'birthday': date(1940, 10, 9)},
+    )
 
 Any keyword arguments passed to ``get_or_create()`` — *except* an optional one
 called ``defaults`` — will be used in a :meth:`get()` call. If an object is
@@ -1723,9 +1728,7 @@ Finally, a word on using ``get_or_create()`` in Django views. Please make sure
 to use it only in ``POST`` requests unless you have a good reason not to.
 ``GET`` requests shouldn't have any effect on data. Instead, use ``POST``
 whenever a request to a page has a side effect on your data. For more, see
-`Safe methods`_ in the HTTP spec.
-
-.. _Safe methods: http://www.w3.org/Protocols/rfc2616/rfc2616-sec9.html#sec9.1.1
+:rfc:`Safe methods <7231#section-4.2.1>` in the HTTP spec.
 
 .. warning::
 

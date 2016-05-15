@@ -10,13 +10,17 @@ from django.db.transaction import atomic
 from django.db.utils import IntegrityError
 from django.test import override_settings, skipUnlessDBFeature
 
-from .models import FoodManager, FoodQuerySet
+from .models import FoodManager, FoodQuerySet, UnicodeModel
 from .test_base import MigrationTestBase
 
 try:
     import sqlparse
 except ImportError:
     sqlparse = None
+
+
+class Mixin(object):
+    pass
 
 
 class OperationTestBase(MigrationTestBase):
@@ -46,7 +50,8 @@ class OperationTestBase(MigrationTestBase):
         operation.state_forwards(app_label, new_state)
         return project_state, new_state
 
-    def set_up_test_model(self, app_label, second_model=False, third_model=False,
+    def set_up_test_model(
+            self, app_label, second_model=False, third_model=False,
             related_model=False, mti_model=False, proxy_model=False, manager_model=False,
             unique_together=False, options=False, db_table=None, index_together=False):
         """
@@ -122,6 +127,7 @@ class OperationTestBase(MigrationTestBase):
                         'Pony',
                         models.CASCADE,
                         auto_created=True,
+                        parent_link=True,
                         primary_key=True,
                         to_field='id',
                         serialize=False,
@@ -197,6 +203,76 @@ class OperationTests(OperationTestBase):
         operation = migrations.CreateModel("Foo", fields=[], managers=[("objects", models.Manager())])
         definition = operation.deconstruct()
         self.assertNotIn('managers', definition[2])
+
+    def test_create_model_with_duplicate_field_name(self):
+        with self.assertRaisesMessage(ValueError, 'Found duplicate value pink in CreateModel fields argument.'):
+            migrations.CreateModel(
+                "Pony",
+                [
+                    ("id", models.AutoField(primary_key=True)),
+                    ("pink", models.TextField()),
+                    ("pink", models.IntegerField(default=1)),
+                ],
+            )
+
+    def test_create_model_with_duplicate_base(self):
+        message = 'Found duplicate value test_crmo.pony in CreateModel bases argument.'
+        with self.assertRaisesMessage(ValueError, message):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                bases=("test_crmo.Pony", "test_crmo.Pony",),
+            )
+        with self.assertRaisesMessage(ValueError, message):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                bases=("test_crmo.Pony", "test_crmo.pony",),
+            )
+        message = 'Found duplicate value migrations.unicodemodel in CreateModel bases argument.'
+        with self.assertRaisesMessage(ValueError, message):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                bases=(UnicodeModel, UnicodeModel,),
+            )
+        with self.assertRaisesMessage(ValueError, message):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                bases=(UnicodeModel, 'migrations.unicodemodel',),
+            )
+        with self.assertRaisesMessage(ValueError, message):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                bases=(UnicodeModel, 'migrations.UnicodeModel',),
+            )
+        message = "Found duplicate value <class 'django.db.models.base.Model'> in CreateModel bases argument."
+        with self.assertRaisesMessage(ValueError, message):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                bases=(models.Model, models.Model,),
+            )
+        message = "Found duplicate value <class 'migrations.test_operations.Mixin'> in CreateModel bases argument."
+        with self.assertRaisesMessage(ValueError, message):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                bases=(Mixin, Mixin,),
+            )
+
+    def test_create_model_with_duplicate_manager_name(self):
+        with self.assertRaisesMessage(ValueError, 'Found duplicate value objects in CreateModel managers argument.'):
+            migrations.CreateModel(
+                "Pony",
+                fields=[],
+                managers=[
+                    ("objects", models.Manager()),
+                    ("objects", models.Manager()),
+                ],
+            )
 
     def test_create_model_with_unique_after(self):
         """
