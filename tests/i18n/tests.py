@@ -16,10 +16,12 @@ from django.conf import settings
 from django.conf.urls.i18n import i18n_patterns
 from django.template import Context, Template, TemplateSyntaxError
 from django.test import (
-    RequestFactory, SimpleTestCase, TestCase, override_settings,
+    RequestFactory, SimpleTestCase, TestCase, ignore_warnings,
+    override_settings,
 )
 from django.utils import six, translation
 from django.utils._os import upath
+from django.utils.deprecation import RemovedInDjango21Warning
 from django.utils.formats import (
     date_format, get_format, get_format_modules, iter_format_modules, localize,
     localize_input, reset_format_cache, sanitize_separators, time_format,
@@ -76,10 +78,10 @@ class TranslationTests(SimpleTestCase):
                 self.assertEqual(get_language(), 'pl')
             self.assertEqual(get_language(), 'de')
             with translation.override(None):
-                self.assertEqual(get_language(), None)
+                self.assertIsNone(get_language())
                 with translation.override('pl'):
                     pass
-                self.assertEqual(get_language(), None)
+                self.assertIsNone(get_language())
             self.assertEqual(get_language(), 'de')
         finally:
             deactivate()
@@ -92,7 +94,7 @@ class TranslationTests(SimpleTestCase):
 
         @translation.override(None)
         def func_none():
-            self.assertEqual(get_language(), None)
+            self.assertIsNone(get_language())
 
         try:
             activate('de')
@@ -417,6 +419,7 @@ class TranslationTests(SimpleTestCase):
                     ' super results{% endblocktrans %}'
                 )
 
+    @ignore_warnings(category=RemovedInDjango21Warning)
     def test_string_concat(self):
         """
         six.text_type(string_concat(...)) should not raise a TypeError - #4796
@@ -475,9 +478,9 @@ class TranslationTests(SimpleTestCase):
         self.assertEqual(trans_real.to_language('sr_Lat'), 'sr-lat')
 
     def test_language_bidi(self):
-        self.assertEqual(get_language_bidi(), False)
+        self.assertIs(get_language_bidi(), False)
         with translation.override(None):
-            self.assertEqual(get_language_bidi(), False)
+            self.assertIs(get_language_bidi(), False)
 
     @override_settings(LOCALE_PATHS=[os.path.join(here, 'other', 'locale')])
     def test_bad_placeholder_1(self):
@@ -526,11 +529,8 @@ class TranslationThreadSafetyTests(SimpleTestCase):
 
     def test_bug14894_translation_activate_thread_safety(self):
         translation_count = len(trans_real._translations)
-        try:
-            translation.activate('pl')
-        except RuntimeError:
-            self.fail('translation.activate() is not thread-safe')
-
+        # May raise RuntimeError if translation.activate() isn't thread-safe.
+        translation.activate('pl')
         # make sure sideeffect_str actually added a new translation
         self.assertLess(translation_count, len(trans_real._translations))
 
@@ -576,6 +576,18 @@ class FormattingTests(SimpleTestCase):
             self.assertEqual('-66666.6', nformat(-66666.666, decimal_sep='.', decimal_pos=1))
             self.assertEqual('-66666.0', nformat(int('-66666'), decimal_sep='.', decimal_pos=1))
             self.assertEqual('10000.0', nformat(self.l, decimal_sep='.', decimal_pos=1))
+            self.assertEqual(
+                '10,00,00,000.00',
+                nformat(100000000.00, decimal_sep='.', decimal_pos=2, grouping=(3, 2, 0), thousand_sep=',')
+            )
+            self.assertEqual(
+                '1,0,00,000,0000.00',
+                nformat(10000000000.00, decimal_sep='.', decimal_pos=2, grouping=(4, 3, 2, 1, 0), thousand_sep=',')
+            )
+            self.assertEqual(
+                '10000,00,000.00',
+                nformat(1000000000.00, decimal_sep='.', decimal_pos=2, grouping=(3, 2, -1), thousand_sep=',')
+            )
             # This unusual grouping/force_grouping combination may be triggered by the intcomma filter (#17414)
             self.assertEqual('10000', nformat(self.l, decimal_sep='.', decimal_pos=0, grouping=0, force_grouping=True))
 
@@ -1315,8 +1327,9 @@ class MiscTests(SimpleTestCase):
             p('de,en-au;q=0.75,en-us;q=0.5,en;q=0.25,es;q=0.125,fa;q=0.125')
         )
         self.assertEqual([('*', 1.0)], p('*'))
-        self.assertEqual([('de', 1.0)], p('de;q=0.'))
+        self.assertEqual([('de', 0.0)], p('de;q=0.'))
         self.assertEqual([('en', 1.0), ('*', 0.5)], p('en; q=1.0, * ; q=0.5'))
+        self.assertEqual([('en', 1.0)], p('en; q=1,'))
         self.assertEqual([], p(''))
 
         # Bad headers; should always return [].
@@ -1336,7 +1349,7 @@ class MiscTests(SimpleTestCase):
         self.assertEqual([], p('de;q=0.a'))
         self.assertEqual([], p('12-345'))
         self.assertEqual([], p(''))
-        self.assertEqual([], p('en; q=1,'))
+        self.assertEqual([], p('en;q=1e0'))
 
     def test_parse_literal_http_header(self):
         """
@@ -1463,13 +1476,13 @@ class MiscTests(SimpleTestCase):
         g = trans_real.get_language_from_path
         self.assertEqual(g('/pl/'), 'pl')
         self.assertEqual(g('/pl'), 'pl')
-        self.assertEqual(g('/xyz/'), None)
+        self.assertIsNone(g('/xyz/'))
 
     def test_get_language_from_path_null(self):
         from django.utils.translation.trans_null import get_language_from_path as g
-        self.assertEqual(g('/pl/'), None)
-        self.assertEqual(g('/pl'), None)
-        self.assertEqual(g('/xyz/'), None)
+        self.assertIsNone(g('/pl/'))
+        self.assertIsNone(g('/pl'))
+        self.assertIsNone(g('/xyz/'))
 
     @override_settings(LOCALE_PATHS=extended_locale_paths)
     def test_percent_in_translatable_block(self):
@@ -1514,6 +1527,12 @@ class MiscTests(SimpleTestCase):
         self.assertEqual('pt-br', g(r))
         with self.settings(LANGUAGES=[('en', 'English')]):
             self.assertNotEqual('pt-br', g(r))
+
+    def test_i18n_patterns_returns_list(self):
+        with override_settings(USE_I18N=False):
+            self.assertIsInstance(i18n_patterns([]), list)
+        with override_settings(USE_I18N=True):
+            self.assertIsInstance(i18n_patterns([]), list)
 
 
 class ResolutionOrderI18NTests(SimpleTestCase):
@@ -1594,7 +1613,7 @@ class TestLanguageInfo(SimpleTestCase):
         self.assertEqual(li['code'], 'de')
         self.assertEqual(li['name_local'], 'Deutsch')
         self.assertEqual(li['name'], 'German')
-        self.assertEqual(li['bidi'], False)
+        self.assertIs(li['bidi'], False)
 
     def test_unknown_language_code(self):
         six.assertRaisesRegex(self, KeyError, r"Unknown language code xx\.", get_language_info, 'xx')
@@ -1608,7 +1627,7 @@ class TestLanguageInfo(SimpleTestCase):
         self.assertEqual(li['code'], 'de')
         self.assertEqual(li['name_local'], 'Deutsch')
         self.assertEqual(li['name'], 'German')
-        self.assertEqual(li['bidi'], False)
+        self.assertIs(li['bidi'], False)
 
     def test_unknown_language_code_and_country_code(self):
         six.assertRaisesRegex(self, KeyError, r"Unknown language code xx-xx and xx\.", get_language_info, 'xx-xx')
@@ -1756,7 +1775,7 @@ class MultipleLocaleActivationTests(SimpleTestCase):
         ('en', 'English'),
         ('fr', 'French'),
     ],
-    MIDDLEWARE_CLASSES=[
+    MIDDLEWARE=[
         'django.middleware.locale.LocaleMiddleware',
         'django.middleware.common.CommonMiddleware',
     ],
@@ -1772,7 +1791,7 @@ class LocaleMiddlewareTests(TestCase):
         self.assertContains(response, "Yes/No")
 
     @override_settings(
-        MIDDLEWARE_CLASSES=[
+        MIDDLEWARE=[
             'django.contrib.sessions.middleware.SessionMiddleware',
             'django.middleware.locale.LocaleMiddleware',
             'django.middleware.common.CommonMiddleware',
@@ -1792,7 +1811,7 @@ class LocaleMiddlewareTests(TestCase):
         ('en', 'English'),
         ('fr', 'French'),
     ],
-    MIDDLEWARE_CLASSES=[
+    MIDDLEWARE=[
         'django.middleware.locale.LocaleMiddleware',
         'django.middleware.common.CommonMiddleware',
     ],
@@ -1828,7 +1847,7 @@ class UnprefixedDefaultLanguageTests(SimpleTestCase):
         ('en-us', 'English'),
         ('pt-br', 'Portuguese (Brazil)'),
     ],
-    MIDDLEWARE_CLASSES=[
+    MIDDLEWARE=[
         'django.middleware.locale.LocaleMiddleware',
         'django.middleware.common.CommonMiddleware',
     ],
@@ -1925,3 +1944,16 @@ class NonDjangoLanguageTests(SimpleTestCase):
     def test_non_django_language(self):
         self.assertEqual(get_language(), 'xxx')
         self.assertEqual(ugettext("year"), "reay")
+
+    @override_settings(
+        USE_I18N=True,
+        LANGUAGES=[
+            ('en-us', 'English'),
+            # xyz language has no locale files
+            ('xyz', 'XYZ'),
+        ],
+    )
+    @translation.override('xyz')
+    def test_plural_non_django_language(self):
+        self.assertEqual(get_language(), 'xyz')
+        self.assertEqual(ungettext('year', 'years', 2), 'years')

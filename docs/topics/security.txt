@@ -65,10 +65,10 @@ this if you know what you are doing. There are other :ref:`limitations
 <csrf-limitations>` if your site has subdomains that are outside of your
 control.
 
-:ref:`CSRF protection works <how-csrf-works>` by checking for a nonce in each
+:ref:`CSRF protection works <how-csrf-works>` by checking for a secret in each
 POST request. This ensures that a malicious user cannot simply "replay" a form
 POST to your website and have another logged in user unwittingly submit that
-form. The malicious user would have to know the nonce, which is user specific
+form. The malicious user would have to know the secret, which is user specific
 (using a cookie).
 
 When deployed with :ref:`HTTPS <security-recommendation-ssl>`,
@@ -160,8 +160,9 @@ server, there are some additional steps you may need:
   to a particular site should always use HTTPS. Combined with redirecting
   requests over HTTP to HTTPS, this will ensure that connections always enjoy
   the added security of SSL provided one successful connection has occurred.
-  HSTS may either be configured with :setting:`SECURE_HSTS_SECONDS` and
-  :setting:`SECURE_HSTS_INCLUDE_SUBDOMAINS` or on the Web server.
+  HSTS may either be configured with :setting:`SECURE_HSTS_SECONDS`,
+  :setting:`SECURE_HSTS_INCLUDE_SUBDOMAINS`, and :setting:`SECURE_HSTS_PRELOAD`,
+  or on the Web server.
 
 .. _host-headers-virtual-hosting:
 

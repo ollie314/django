@@ -4,20 +4,24 @@ from __future__ import unicode_literals
 import datetime
 
 from django.apps.registry import Apps, apps
-from django.contrib.contenttypes import management
+from django.conf import settings
+from django.contrib.contenttypes import management as contenttypes_management
 from django.contrib.contenttypes.fields import (
     GenericForeignKey, GenericRelation,
 )
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.sites.models import Site
-from django.core import checks
-from django.db import connections, models
-from django.test import SimpleTestCase, TestCase, mock, override_settings
+from django.core import checks, management
+from django.core.management import call_command
+from django.db import connections, migrations, models
+from django.test import (
+    SimpleTestCase, TestCase, TransactionTestCase, mock, override_settings,
+)
 from django.test.utils import captured_stdout, isolate_apps
 from django.utils.encoding import force_str, force_text
 
 from .models import (
-    Article, Author, ModelWithNullFKToSite, SchemeIncludedURL,
+    Article, Author, ModelWithNullFKToSite, Post, SchemeIncludedURL,
     Site as MockSite,
 )
 
@@ -380,28 +384,63 @@ class GenericRelationshipTests(SimpleTestCase):
 class UpdateContentTypesTests(TestCase):
     def setUp(self):
         self.before_count = ContentType.objects.count()
-        ContentType.objects.create(app_label='contenttypes_tests', model='Fake')
+        self.content_type = ContentType.objects.create(app_label='contenttypes_tests', model='Fake')
         self.app_config = apps.get_app_config('contenttypes_tests')
 
-    def test_interactive_true(self):
+    def test_interactive_true_with_dependent_objects(self):
         """
-        interactive mode of update_contenttypes() (the default) should delete
-        stale contenttypes.
+        interactive mode of remove_stale_contenttypes (the default) should
+        delete stale contenttypes and warn of dependent objects.
         """
-        management.input = lambda x: force_str("yes")
-        with captured_stdout() as stdout:
-            management.update_contenttypes(self.app_config)
+        post = Post.objects.create(title='post', content_type=self.content_type)
+        # A related object is needed to show that a custom collector with
+        # can_fast_delete=False is needed.
+        ModelWithNullFKToSite.objects.create(post=post)
+        with mock.patch(
+            'django.contrib.contenttypes.management.commands.remove_stale_contenttypes.input',
+            return_value='yes'
+        ):
+            with captured_stdout() as stdout:
+                call_command('remove_stale_contenttypes', verbosity=2, stdout=stdout)
+        self.assertEqual(Post.objects.count(), 0)
+        output = stdout.getvalue()
+        self.assertIn('- Content type for contenttypes_tests.Fake', output)
+        self.assertIn('- 1 contenttypes_tests.Post object(s)', output)
+        self.assertIn('- 1 contenttypes_tests.ModelWithNullFKToSite', output)
+        self.assertIn('Deleting stale content type', output)
+        self.assertEqual(ContentType.objects.count(), self.before_count)
+
+    def test_interactive_true_without_dependent_objects(self):
+        """
+        interactive mode of remove_stale_contenttypes (the default) should
+        delete stale contenttypes even if there aren't any dependent objects.
+        """
+        with mock.patch(
+            'django.contrib.contenttypes.management.commands.remove_stale_contenttypes.input',
+            return_value='yes'
+        ):
+            with captured_stdout() as stdout:
+                call_command('remove_stale_contenttypes', verbosity=2)
         self.assertIn("Deleting stale content type", stdout.getvalue())
         self.assertEqual(ContentType.objects.count(), self.before_count)
 
     def test_interactive_false(self):
         """
-        non-interactive mode of update_contenttypes() shouldn't delete stale
-        content types.
+        non-interactive mode of remove_stale_contenttypes shouldn't delete
+        stale content types.
         """
         with captured_stdout() as stdout:
-            management.update_contenttypes(self.app_config, interactive=False)
+            call_command('remove_stale_contenttypes', interactive=False, verbosity=2)
         self.assertIn("Stale content types remain.", stdout.getvalue())
+        self.assertEqual(ContentType.objects.count(), self.before_count + 1)
+
+    def test_unavailable_content_type_model(self):
+        """
+        A ContentType shouldn't be created if the model isn't available.
+        """
+        apps = Apps()
+        with self.assertNumQueries(0):
+            contenttypes_management.create_contenttypes(self.app_config, interactive=False, verbosity=0, apps=apps)
         self.assertEqual(ContentType.objects.count(), self.before_count + 1)
 
 
@@ -435,3 +474,72 @@ class ContentTypesMultidbTestCase(TestCase):
         with self.assertNumQueries(0, using='default'), \
                 self.assertNumQueries(1, using='other'):
             ContentType.objects.get_for_model(Author)
+
+
+@override_settings(
+    MIGRATION_MODULES=dict(settings.MIGRATION_MODULES, contenttypes_tests='contenttypes_tests.operations_migrations'),
+)
+class ContentTypeOperationsTests(TransactionTestCase):
+    available_apps = [
+        'contenttypes_tests',
+        'django.contrib.contenttypes',
+        'django.contrib.auth',
+    ]
+
+    def setUp(self):
+        app_config = apps.get_app_config('contenttypes_tests')
+        models.signals.post_migrate.connect(self.assertOperationsInjected, sender=app_config)
+
+    def tearDown(self):
+        app_config = apps.get_app_config('contenttypes_tests')
+        models.signals.post_migrate.disconnect(self.assertOperationsInjected, sender=app_config)
+
+    def assertOperationsInjected(self, plan, **kwargs):
+        for migration, _backward in plan:
+            operations = iter(migration.operations)
+            for operation in operations:
+                if isinstance(operation, migrations.RenameModel):
+                    next_operation = next(operations)
+                    self.assertIsInstance(next_operation, contenttypes_management.RenameContentType)
+                    self.assertEqual(next_operation.app_label, migration.app_label)
+                    self.assertEqual(next_operation.old_model, operation.old_name_lower)
+                    self.assertEqual(next_operation.new_model, operation.new_name_lower)
+
+    def test_existing_content_type_rename(self):
+        ContentType.objects.create(app_label='contenttypes_tests', model='foo')
+        management.call_command(
+            'migrate', 'contenttypes_tests', database='default', interactive=False, verbosity=0,
+        )
+        self.assertFalse(ContentType.objects.filter(app_label='contenttypes_tests', model='foo').exists())
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='renamedfoo').exists())
+        management.call_command(
+            'migrate', 'contenttypes_tests', 'zero', database='default', interactive=False, verbosity=0,
+        )
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='foo').exists())
+        self.assertFalse(ContentType.objects.filter(app_label='contenttypes_tests', model='renamedfoo').exists())
+
+    def test_missing_content_type_rename_ignore(self):
+        management.call_command(
+            'migrate', 'contenttypes_tests', database='default', interactive=False, verbosity=0,
+        )
+        self.assertFalse(ContentType.objects.filter(app_label='contenttypes_tests', model='foo').exists())
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='renamedfoo').exists())
+        management.call_command(
+            'migrate', 'contenttypes_tests', 'zero', database='default', interactive=False, verbosity=0,
+        )
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='foo').exists())
+        self.assertFalse(ContentType.objects.filter(app_label='contenttypes_tests', model='renamedfoo').exists())
+
+    def test_content_type_rename_conflict(self):
+        ContentType.objects.create(app_label='contenttypes_tests', model='foo')
+        ContentType.objects.create(app_label='contenttypes_tests', model='renamedfoo')
+        management.call_command(
+            'migrate', 'contenttypes_tests', database='default', interactive=False, verbosity=0,
+        )
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='foo').exists())
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='renamedfoo').exists())
+        management.call_command(
+            'migrate', 'contenttypes_tests', 'zero', database='default', interactive=False, verbosity=0,
+        )
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='foo').exists())
+        self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='renamedfoo').exists())

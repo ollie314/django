@@ -22,7 +22,7 @@ DEBUG = False
 # on a live site.
 DEBUG_PROPAGATE_EXCEPTIONS = False
 
-# Whether to use the "Etag" header. This saves bandwidth but slows down performance.
+# Whether to use the "ETag" header. This saves bandwidth but slows down performance.
 USE_ETAGS = False
 
 # People who get code error notifications.
@@ -67,6 +67,7 @@ LANGUAGES = [
     ('cy', gettext_noop('Welsh')),
     ('da', gettext_noop('Danish')),
     ('de', gettext_noop('German')),
+    ('dsb', gettext_noop('Lower Sorbian')),
     ('el', gettext_noop('Greek')),
     ('en', gettext_noop('English')),
     ('en-au', gettext_noop('Australian English')),
@@ -90,6 +91,7 @@ LANGUAGES = [
     ('he', gettext_noop('Hebrew')),
     ('hi', gettext_noop('Hindi')),
     ('hr', gettext_noop('Croatian')),
+    ('hsb', gettext_noop('Upper Sorbian')),
     ('hu', gettext_noop('Hungarian')),
     ('ia', gettext_noop('Interlingua')),
     ('id', gettext_noop('Indonesian')),
@@ -193,6 +195,9 @@ EMAIL_HOST = 'localhost'
 
 # Port for sending email.
 EMAIL_PORT = 25
+
+# Whether to send SMTP 'Date' header in the local time zone or in UTC.
+EMAIL_USE_LOCALTIME = False
 
 # Optional SMTP authentication information for EMAIL_HOST.
 EMAIL_HOST_USER = ''
@@ -299,12 +304,12 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
 FILE_UPLOAD_TEMP_DIR = None
 
 # The numeric mode to set newly-uploaded files to. The value should be a mode
-# you'd pass directly to os.chmod; see http://docs.python.org/lib/os-file-dir.html.
+# you'd pass directly to os.chmod; see https://docs.python.org/3/library/os.html#files-and-directories.
 FILE_UPLOAD_PERMISSIONS = None
 
 # The numeric mode to assign to newly-created directories, when uploading files.
 # The value should be a mode as you'd pass to os.chmod;
-# see http://docs.python.org/lib/os-file-dir.html.
+# see https://docs.python.org/3/library/os.html#files-and-directories.
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = None
 
 # Python module path where user will place custom format definition.
@@ -433,13 +438,15 @@ SECURE_PROXY_SSL_HEADER = None
 # MIDDLEWARE #
 ##############
 
-# List of middleware classes to use.  Order is important; in the request phase,
-# this middleware classes will be applied in the order given, and in the
-# response phase the middleware will be applied in reverse order.
+# List of middleware to use. Order is important; in the request phase, these
+# middleware will be applied in the order given, and in the response
+# phase the middleware will be applied in reverse order.
 MIDDLEWARE_CLASSES = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
 ]
+
+MIDDLEWARE = None
 
 ############
 # SESSIONS #
@@ -622,6 +629,7 @@ SILENCED_SYSTEM_CHECKS = []
 SECURE_BROWSER_XSS_FILTER = False
 SECURE_CONTENT_TYPE_NOSNIFF = False
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+SECURE_HSTS_PRELOAD = False
 SECURE_HSTS_SECONDS = 0
 SECURE_REDIRECT_EXEMPT = []
 SECURE_SSL_HOST = None

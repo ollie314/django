@@ -10,9 +10,11 @@ from django.test import (
     SimpleTestCase, TestCase, modify_settings, override_settings,
 )
 from django.test.selenium import SeleniumTestCase
+from django.test.utils import ignore_warnings
 from django.urls import reverse
 from django.utils import six
 from django.utils._os import upath
+from django.utils.deprecation import RemovedInDjango20Warning
 from django.utils.translation import (
     LANGUAGE_SESSION_KEY, get_language, override,
 )
@@ -49,6 +51,23 @@ class I18NTests(TestCase):
         lang_code = self._get_inactive_language_code()
         post_data = dict(language=lang_code, next='//unsafe/redirection/')
         response = self.client.post('/i18n/setlang/', data=post_data)
+        self.assertEqual(response.url, '/')
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+
+    def test_setlang_http_next(self):
+        """
+        The set_language view only redirects to the 'next' argument if it is
+        "safe" and its scheme is https if the request was sent over https.
+        """
+        lang_code = self._get_inactive_language_code()
+        non_https_next_url = 'http://testserver/redirection/'
+        post_data = dict(language=lang_code, next=non_https_next_url)
+        # Insecure URL in POST data.
+        response = self.client.post('/i18n/setlang/', data=post_data, secure=True)
+        self.assertEqual(response.url, '/')
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
+        # Insecure URL in HTTP referer.
+        response = self.client.post('/i18n/setlang/', secure=True, HTTP_REFERER=non_https_next_url)
         self.assertEqual(response.url, '/')
         self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
 
@@ -123,6 +142,27 @@ class I18NTests(TestCase):
         # we force saving language to a cookie rather than a session
         # by excluding session middleware and those which do require it
         test_settings = dict(
+            MIDDLEWARE=['django.middleware.common.CommonMiddleware'],
+            LANGUAGE_COOKIE_NAME='mylanguage',
+            LANGUAGE_COOKIE_AGE=3600 * 7 * 2,
+            LANGUAGE_COOKIE_DOMAIN='.example.com',
+            LANGUAGE_COOKIE_PATH='/test/',
+        )
+        with self.settings(**test_settings):
+            post_data = dict(language='pl', next='/views/')
+            response = self.client.post('/i18n/setlang/', data=post_data)
+            language_cookie = response.cookies.get('mylanguage')
+            self.assertEqual(language_cookie.value, 'pl')
+            self.assertEqual(language_cookie['domain'], '.example.com')
+            self.assertEqual(language_cookie['path'], '/test/')
+            self.assertEqual(language_cookie['max-age'], 3600 * 7 * 2)
+
+    @ignore_warnings(category=RemovedInDjango20Warning)
+    def test_setlang_cookie_middleware_classes(self):
+        # we force saving language to a cookie rather than a session
+        # by excluding session middleware and those which do require it
+        test_settings = dict(
+            MIDDLEWARE=None,
             MIDDLEWARE_CLASSES=['django.middleware.common.CommonMiddleware'],
             LANGUAGE_COOKIE_NAME='mylanguage',
             LANGUAGE_COOKIE_AGE=3600 * 7 * 2,
@@ -150,10 +190,32 @@ class I18NTests(TestCase):
         self.assertRedirects(response, encoded_url, fetch_redirect_response=False)
         self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], lang_code)
 
-    @modify_settings(MIDDLEWARE_CLASSES={
+    @modify_settings(MIDDLEWARE={
         'append': 'django.middleware.locale.LocaleMiddleware',
     })
     def test_lang_from_translated_i18n_pattern(self):
+        response = self.client.post(
+            '/i18n/setlang/', data={'language': 'nl'},
+            follow=True, HTTP_REFERER='/en/translated/'
+        )
+        self.assertEqual(self.client.session[LANGUAGE_SESSION_KEY], 'nl')
+        self.assertRedirects(response, '/nl/vertaald/')
+        # And reverse
+        response = self.client.post(
+            '/i18n/setlang/', data={'language': 'en'},
+            follow=True, HTTP_REFERER='/nl/vertaald/'
+        )
+        self.assertRedirects(response, '/en/translated/')
+
+    @ignore_warnings(category=RemovedInDjango20Warning)
+    @override_settings(
+        MIDDLEWARE=None,
+        MIDDLEWARE_CLASSES=[
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.locale.LocaleMiddleware',
+        ],
+    )
+    def test_lang_from_translated_i18n_pattern_middleware_classes(self):
         response = self.client.post(
             '/i18n/setlang/', data={'language': 'nl'},
             follow=True, HTTP_REFERER='/en/translated/'

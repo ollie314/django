@@ -8,6 +8,7 @@ from django.core import checks
 from django.core.files.base import File
 from django.core.files.images import ImageFile
 from django.core.files.storage import default_storage
+from django.core.validators import validate_image_file_extension
 from django.db.models import signals
 from django.db.models.fields import Field
 from django.utils import six
@@ -45,10 +46,10 @@ class FieldFile(File):
         if not self:
             raise ValueError("The '%s' attribute has no file associated with it." % self.field.name)
 
-    def _get_file(self, mode='rb'):
+    def _get_file(self):
         self._require_file()
         if not hasattr(self, '_file') or self._file is None:
-            self._file = self.storage.open(self.name, mode)
+            self._file = self.storage.open(self.name, 'rb')
         return self._file
 
     def _set_file(self, file):
@@ -59,25 +60,29 @@ class FieldFile(File):
 
     file = property(_get_file, _set_file, _del_file)
 
-    def _get_path(self):
+    @property
+    def path(self):
         self._require_file()
         return self.storage.path(self.name)
-    path = property(_get_path)
 
-    def _get_url(self):
+    @property
+    def url(self):
         self._require_file()
         return self.storage.url(self.name)
-    url = property(_get_url)
 
-    def _get_size(self):
+    @property
+    def size(self):
         self._require_file()
         if not self._committed:
             return self.file.size
         return self.storage.size(self.name)
-    size = property(_get_size)
 
     def open(self, mode='rb'):
-        self._get_file(mode)
+        self._require_file()
+        if hasattr(self, '_file') and self._file is not None:
+            self.file.open(mode)
+        else:
+            self.file = self.storage.open(self.name, mode)
     # open() doesn't alter the file's contents, but it does reset the pointer
     open.alters_data = True
 
@@ -115,10 +120,10 @@ class FieldFile(File):
             self.instance.save()
     delete.alters_data = True
 
-    def _get_closed(self):
+    @property
+    def closed(self):
         file = getattr(self, '_file', None)
         return file is None or file.closed
-    closed = property(_get_closed)
 
     def close(self):
         file = getattr(self, '_file', None)
@@ -166,7 +171,11 @@ class FileDescriptor(object):
 
         # The instance dict contains whatever was originally assigned
         # in __set__.
-        file = instance.__dict__[self.field.name]
+        if self.field.name in instance.__dict__:
+            file = instance.__dict__[self.field.name]
+        else:
+            instance.refresh_from_db(fields=[self.field.name])
+            file = getattr(instance, self.field.name)
 
         # If this value is a string (instance.file = "path/to/file") or None
         # then we simply wrap it with the appropriate attribute class according
@@ -377,6 +386,7 @@ class ImageFieldFile(ImageFile, FieldFile):
 
 
 class ImageField(FileField):
+    default_validators = [validate_image_file_extension]
     attr_class = ImageFieldFile
     descriptor_class = ImageFileDescriptor
     description = _("Image")
@@ -436,9 +446,10 @@ class ImageField(FileField):
         Dimensions can be forced to update with force=True, which is how
         ImageFileDescriptor.__set__ calls this method.
         """
-        # Nothing to update if the field doesn't have dimension fields.
+        # Nothing to update if the field doesn't have dimension fields or if
+        # the field is deferred.
         has_dimension_fields = self.width_field or self.height_field
-        if not has_dimension_fields:
+        if not has_dimension_fields or self.attname not in instance.__dict__:
             return
 
         # getattr will call the ImageFileDescriptor's __get__ method, which

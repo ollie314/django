@@ -22,11 +22,6 @@ from .models import (
 )
 
 
-def postgis_bug_version():
-    spatial_version = getattr(connection.ops, "spatial_version", (0, 0, 0))
-    return spatial_version and (2, 0, 0) <= spatial_version <= (2, 0, 1)
-
-
 @skipUnlessDBFeature("gis_enabled")
 class GeoModelTest(TestCase):
     fixtures = ['initial']
@@ -48,12 +43,8 @@ class GeoModelTest(TestCase):
         # Making sure TypeError is thrown when trying to set with an
         #  incompatible type.
         for bad in [5, 2.0, LineString((0, 0), (1, 1))]:
-            try:
+            with self.assertRaisesMessage(TypeError, 'Cannot set'):
                 nullcity.point = bad
-            except TypeError:
-                pass
-            else:
-                self.fail('Should throw a TypeError')
 
         # Now setting with a compatible GEOS Geometry, saving, and ensuring
         #  the save took, notice no SRID is explicitly set.
@@ -156,7 +147,7 @@ class GeoModelTest(TestCase):
     def test_createnull(self):
         "Testing creating a model instance and the geometry being None"
         c = City()
-        self.assertEqual(c.point, None)
+        self.assertIsNone(c.point)
 
     def test_geometryfield(self):
         "Testing the general GeometryField."
@@ -314,11 +305,6 @@ class GeoLookupTest(TestCase):
         # Right: A >> B => true if xmin(A) > xmax(B)
         # See: BOX2D_left() and BOX2D_right() in lwgeom_box2dfloat4.c in PostGIS source.
 
-        # The left/right lookup tests are known failures on PostGIS 2.0/2.0.1
-        # http://trac.osgeo.org/postgis/ticket/2035
-        if postgis_bug_version():
-            self.skipTest("PostGIS 2.0/2.0.1 left and right lookups are known to be buggy.")
-
         # Getting the borders for Colorado & Kansas
         co_border = State.objects.get(name='Colorado').poly
         ks_border = State.objects.get(name='Kansas').poly
@@ -397,7 +383,7 @@ class GeoLookupTest(TestCase):
 
         # Saving another commonwealth w/a NULL geometry.
         nmi = State.objects.create(name='Northern Mariana Islands', poly=None)
-        self.assertEqual(nmi.poly, None)
+        self.assertIsNone(nmi.poly)
 
         # Assigning a geometry and saving -- then UPDATE back to NULL.
         nmi.poly = 'POLYGON((0 0,1 0,1 1,1 0,0 0))'

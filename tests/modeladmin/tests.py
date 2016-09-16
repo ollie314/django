@@ -925,7 +925,7 @@ class PrepopulatedFieldsCheckTests(CheckTestCase):
         self.assertIsInvalid(
             ValidationTestModelAdmin, ValidationTestModel,
             ("The value of 'prepopulated_fields' refers to 'users', which must not be "
-             "a DateTimeField, a foreign key, or a many-to-many field."),
+             "a DateTimeField, a ForeignKey, or a ManyToManyField."),
             'admin.E028')
 
     def test_valid_case(self):
@@ -963,7 +963,7 @@ class ListDisplayTests(CheckTestCase):
 
         self.assertIsInvalid(
             ValidationTestModelAdmin, ValidationTestModel,
-            "The value of 'list_display[0]' must not be a many-to-many field.",
+            "The value of 'list_display[0]' must not be a ManyToManyField.",
             'admin.E109')
 
     def test_valid_case(self):
@@ -1175,9 +1175,10 @@ class DateHierarchyCheckTests(CheckTestCase):
 
         self.assertIsInvalid(
             ValidationTestModelAdmin, ValidationTestModel,
-            ("The value of 'date_hierarchy' refers to 'non_existent_field', which "
-             "is not an attribute of 'modeladmin.ValidationTestModel'."),
-            'admin.E127')
+            "The value of 'date_hierarchy' refers to 'non_existent_field', which "
+            "does not refer to a Field.",
+            'admin.E127'
+        )
 
     def test_invalid_field_type(self):
         class ValidationTestModelAdmin(ModelAdmin):
@@ -1193,6 +1194,22 @@ class DateHierarchyCheckTests(CheckTestCase):
             date_hierarchy = 'pub_date'
 
         self.assertIsValid(ValidationTestModelAdmin, ValidationTestModel)
+
+    def test_related_valid_case(self):
+        class ValidationTestModelAdmin(ModelAdmin):
+            date_hierarchy = 'band__sign_date'
+
+        self.assertIsValid(ValidationTestModelAdmin, ValidationTestModel)
+
+    def test_related_invalid_field_type(self):
+        class ValidationTestModelAdmin(ModelAdmin):
+            date_hierarchy = 'band__name'
+
+        self.assertIsInvalid(
+            ValidationTestModelAdmin, ValidationTestModel,
+            "The value of 'date_hierarchy' must be a DateField or DateTimeField.",
+            'admin.E128'
+        )
 
 
 class OrderingCheckTests(CheckTestCase):
@@ -1322,7 +1339,7 @@ class InlinesCheckTests(CheckTestCase):
 
         self.assertIsInvalidRegexp(
             ValidationTestModelAdmin, ValidationTestModel,
-            r"'.*\.ValidationTestInline' must inherit from 'BaseModelAdmin'\.",
+            r"'.*\.ValidationTestInline' must inherit from 'InlineModelAdmin'\.",
             'admin.E104')
 
     def test_missing_model_field(self):

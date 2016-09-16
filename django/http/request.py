@@ -24,7 +24,7 @@ from django.utils.six.moves.urllib.parse import (
 )
 
 RAISE_ERROR = object()
-host_validation_re = re.compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9:]+\])(:\d+)?$")
+host_validation_re = re.compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9\.:]+\])(:\d+)?$")
 
 
 class UnreadablePostError(IOError):
@@ -264,7 +264,7 @@ class HttpRequest(object):
 
             # Limit the maximum request data size that will be handled in-memory.
             if (settings.DATA_UPLOAD_MAX_MEMORY_SIZE is not None and
-                    int(self.META.get('CONTENT_LENGTH', 0)) > settings.DATA_UPLOAD_MAX_MEMORY_SIZE):
+                    int(self.META.get('CONTENT_LENGTH') or 0) > settings.DATA_UPLOAD_MAX_MEMORY_SIZE):
                 raise RequestDataTooBig('Request body exceeded settings.DATA_UPLOAD_MAX_MEMORY_SIZE.')
 
             try:
@@ -402,6 +402,19 @@ class QueryDict(MultiValueDict):
                                 value)
         self._mutable = mutable
 
+    @classmethod
+    def fromkeys(cls, iterable, value='', mutable=False, encoding=None):
+        """
+        Return a new QueryDict with keys (may be repeated) from an iterable and
+        values from value.
+        """
+        q = cls('', mutable=True, encoding=encoding)
+        for key in iterable:
+            q.appendlist(key, value)
+        if not mutable:
+            q._mutable = False
+        return q
+
     @property
     def encoding(self):
         if self._encoding is None:
@@ -508,7 +521,7 @@ class QueryDict(MultiValueDict):
 
 
 # It's neither necessary nor appropriate to use
-# django.utils.encoding.smart_text for parsing URLs and form inputs. Thus,
+# django.utils.encoding.force_text for parsing URLs and form inputs. Thus,
 # this slightly more restricted function, used by QueryDict.
 def bytes_to_text(s, encoding):
     """

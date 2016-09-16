@@ -212,9 +212,13 @@ class SafeMIMEText(MIMEMixin, MIMEText):
     def __init__(self, _text, _subtype='plain', _charset=None):
         self.encoding = _charset
         if _charset == 'utf-8':
-            # Unfortunately, Python < 3.5 doesn't support setting a Charset instance
-            # as MIMEText init parameter (http://bugs.python.org/issue16324).
+            # Unfortunately, Python doesn't yet pass a Charset instance as
+            # MIMEText init parameter to set_payload().
+            # http://bugs.python.org/issue27445
             # We do it manually and trigger re-encoding of the payload.
+            if six.PY3 and isinstance(_text, bytes):
+                # Sniffing encoding would fail with bytes content in MIMEText.__init__.
+                _text = _text.decode('utf-8')
             MIMEText.__init__(self, _text, _subtype, None)
             del self['Content-Transfer-Encoding']
             has_long_lines = any(len(l) > RFC5322_EMAIL_LINE_LENGTH_LIMIT for l in _text.splitlines())
@@ -316,7 +320,11 @@ class EmailMessage(object):
         # accommodate that when doing comparisons.
         header_names = [key.lower() for key in self.extra_headers]
         if 'date' not in header_names:
-            msg['Date'] = formatdate()
+            # formatdate() uses stdlib methods to format the date, which use
+            # the stdlib/OS concept of a timezone, however, Django sets the
+            # TZ environment variable based on the TIME_ZONE setting which
+            # will get picked up by formatdate().
+            msg['Date'] = formatdate(localtime=settings.EMAIL_USE_LOCALTIME)
         if 'message-id' not in header_names:
             # Use cached DNS_NAME for performance
             msg['Message-ID'] = make_msgid(domain=DNS_NAME)
@@ -348,6 +356,11 @@ class EmailMessage(object):
 
         If the first parameter is a MIMEBase subclass it is inserted directly
         into the resulting message attachments.
+
+        For a text/* mimetype (guessed or specified), when a bytes object is
+        specified as content, it will be decoded as UTF-8. If that fails,
+        the mimetype will be set to DEFAULT_ATTACHMENT_MIME_TYPE and the
+        content is not decoded.
         """
         if isinstance(filename, MIMEBase):
             assert content is None
@@ -355,6 +368,22 @@ class EmailMessage(object):
             self.attachments.append(filename)
         else:
             assert content is not None
+
+            if not mimetype:
+                mimetype, _ = mimetypes.guess_type(filename)
+                if not mimetype:
+                    mimetype = DEFAULT_ATTACHMENT_MIME_TYPE
+            basetype, subtype = mimetype.split('/', 1)
+
+            if basetype == 'text':
+                if isinstance(content, six.binary_type):
+                    try:
+                        content = content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # If mimetype suggests the file is text but it's actually
+                        # binary, read() will raise a UnicodeDecodeError on Python 3.
+                        mimetype = DEFAULT_ATTACHMENT_MIME_TYPE
+
             self.attachments.append((filename, content, mimetype))
 
     def attach_file(self, path, mimetype=None):
@@ -362,33 +391,17 @@ class EmailMessage(object):
         Attaches a file from the filesystem.
 
         The mimetype will be set to the DEFAULT_ATTACHMENT_MIME_TYPE if it is
-        not specified and cannot be guessed or (PY3 only) if it suggests
-        text/* for a binary file.
+        not specified and cannot be guessed.
+
+        For a text/* mimetype (guessed or specified), the file's content
+        will be decoded as UTF-8. If that fails, the mimetype will be set to
+        DEFAULT_ATTACHMENT_MIME_TYPE and the content is not decoded.
         """
         filename = os.path.basename(path)
-        if not mimetype:
-            mimetype, _ = mimetypes.guess_type(filename)
-            if not mimetype:
-                mimetype = DEFAULT_ATTACHMENT_MIME_TYPE
-        basetype, subtype = mimetype.split('/', 1)
-        read_mode = 'r' if basetype == 'text' else 'rb'
-        content = None
 
-        with open(path, read_mode) as f:
-            try:
-                content = f.read()
-            except UnicodeDecodeError:
-                # If mimetype suggests the file is text but it's actually
-                # binary, read() will raise a UnicodeDecodeError on Python 3.
-                pass
-
-        # If the previous read in text mode failed, try binary mode.
-        if content is None:
-            with open(path, 'rb') as f:
-                content = f.read()
-                mimetype = DEFAULT_ATTACHMENT_MIME_TYPE
-
-        self.attach(filename, content, mimetype)
+        with open(path, 'rb') as file:
+            content = file.read()
+            self.attach(filename, content, mimetype)
 
     def _create_message(self, msg):
         return self._create_attachments(msg)
@@ -442,10 +455,6 @@ class EmailMessage(object):
         Converts the filename, content, mimetype triple into a MIME attachment
         object.
         """
-        if mimetype is None:
-            mimetype, _ = mimetypes.guess_type(filename)
-            if mimetype is None:
-                mimetype = DEFAULT_ATTACHMENT_MIME_TYPE
         attachment = self._create_mime_attachment(content, mimetype)
         if filename:
             try:

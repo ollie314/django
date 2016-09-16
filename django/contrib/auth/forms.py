@@ -1,5 +1,7 @@
 from __future__ import unicode_literals
 
+import unicodedata
+
 from django import forms
 from django.contrib.auth import (
     authenticate, get_user_model, password_validation,
@@ -60,6 +62,11 @@ class ReadOnlyPasswordHashField(forms.Field):
         return False
 
 
+class UsernameField(forms.CharField):
+    def to_python(self, value):
+        return unicodedata.normalize('NFKC', super(UsernameField, self).to_python(value))
+
+
 class UserCreationForm(forms.ModelForm):
     """
     A form that creates a user, with no privileges, from the given username and
@@ -72,6 +79,7 @@ class UserCreationForm(forms.ModelForm):
         label=_("Password"),
         strip=False,
         widget=forms.PasswordInput,
+        help_text=password_validation.password_validators_help_text_html(),
     )
     password2 = forms.CharField(
         label=_("Password confirmation"),
@@ -83,10 +91,12 @@ class UserCreationForm(forms.ModelForm):
     class Meta:
         model = User
         fields = ("username",)
+        field_classes = {'username': UsernameField}
 
     def __init__(self, *args, **kwargs):
         super(UserCreationForm, self).__init__(*args, **kwargs)
-        self.fields[self._meta.model.USERNAME_FIELD].widget.attrs.update({'autofocus': ''})
+        if self._meta.model.USERNAME_FIELD in self.fields:
+            self.fields[self._meta.model.USERNAME_FIELD].widget.attrs.update({'autofocus': True})
 
     def clean_password2(self):
         password1 = self.cleaned_data.get("password1")
@@ -121,6 +131,7 @@ class UserChangeForm(forms.ModelForm):
     class Meta:
         model = User
         fields = '__all__'
+        field_classes = {'username': UsernameField}
 
     def __init__(self, *args, **kwargs):
         super(UserChangeForm, self).__init__(*args, **kwargs)
@@ -140,9 +151,9 @@ class AuthenticationForm(forms.Form):
     Base class for authenticating users. Extend this to get a form that accepts
     username/password logins.
     """
-    username = forms.CharField(
+    username = UsernameField(
         max_length=254,
-        widget=forms.TextInput(attrs={'autofocus': ''}),
+        widget=forms.TextInput(attrs={'autofocus': True}),
     )
     password = forms.CharField(
         label=_("Password"),
@@ -177,8 +188,8 @@ class AuthenticationForm(forms.Form):
         username = self.cleaned_data.get('username')
         password = self.cleaned_data.get('password')
 
-        if username and password:
-            self.user_cache = authenticate(username=username, password=password)
+        if username is not None and password:
+            self.user_cache = authenticate(self.request, username=username, password=password)
             if self.user_cache is None:
                 raise forms.ValidationError(
                     self.error_messages['invalid_login'],
@@ -337,7 +348,7 @@ class PasswordChangeForm(SetPasswordForm):
     old_password = forms.CharField(
         label=_("Old password"),
         strip=False,
-        widget=forms.PasswordInput(attrs={'autofocus': ''}),
+        widget=forms.PasswordInput(attrs={'autofocus': True}),
     )
 
     field_order = ['old_password', 'new_password1', 'new_password2']
@@ -365,7 +376,7 @@ class AdminPasswordChangeForm(forms.Form):
     required_css_class = 'required'
     password1 = forms.CharField(
         label=_("Password"),
-        widget=forms.PasswordInput(attrs={'autofocus': ''}),
+        widget=forms.PasswordInput(attrs={'autofocus': True}),
         strip=False,
         help_text=password_validation.password_validators_help_text_html(),
     )
@@ -402,10 +413,10 @@ class AdminPasswordChangeForm(forms.Form):
             self.user.save()
         return self.user
 
-    def _get_changed_data(self):
+    @property
+    def changed_data(self):
         data = super(AdminPasswordChangeForm, self).changed_data
         for name in self.fields.keys():
             if name not in data:
                 return []
         return ['password']
-    changed_data = property(_get_changed_data)

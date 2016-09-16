@@ -13,8 +13,8 @@ from django.core.exceptions import (
     ObjectDoesNotExist, ValidationError,
 )
 from django.db import (
-    DEFAULT_DB_ALIAS, DJANGO_VERSION_PICKLE_KEY, DatabaseError, connections,
-    router, transaction,
+    DEFAULT_DB_ALIAS, DJANGO_VERSION_PICKLE_KEY, DatabaseError, connection,
+    connections, router, transaction,
 )
 from django.db.models import signals
 from django.db.models.constants import LOOKUP_SEP
@@ -24,11 +24,12 @@ from django.db.models.fields.related import (
     ForeignObjectRel, ManyToOneRel, OneToOneField, lazy_related_operation,
     resolve_relation,
 )
-from django.db.models.manager import ensure_default_manager
+from django.db.models.manager import Manager
 from django.db.models.options import Options
 from django.db.models.query import Q
 from django.db.models.utils import make_model_tuple
 from django.utils import six
+from django.utils.deprecation import RemovedInDjango20Warning
 from django.utils.encoding import (
     force_str, force_text, python_2_unicode_compatible,
 )
@@ -151,18 +152,6 @@ class ModelBase(type):
         if is_proxy and base_meta and base_meta.swapped:
             raise TypeError("%s cannot proxy the swapped model '%s'." % (name, base_meta.swapped))
 
-        if getattr(new_class, '_default_manager', None):
-            if not is_proxy:
-                # Multi-table inheritance doesn't inherit default manager from
-                # parents.
-                new_class._default_manager = None
-                new_class._base_manager = None
-            else:
-                # Proxy classes do inherit parent's default manager, if none is
-                # set explicitly.
-                new_class._default_manager = new_class._default_manager._copy_to_model(new_class)
-                new_class._base_manager = new_class._base_manager._copy_to_model(new_class)
-
         # Add all attributes to the class.
         for obj_name, obj in attrs.items():
             new_class.add_to_class(obj_name, obj)
@@ -212,26 +201,34 @@ class ModelBase(type):
                 if isinstance(field, OneToOneField):
                     related = resolve_relation(new_class, field.remote_field.model)
                     parent_links[make_model_tuple(related)] = field
+
+        # Track fields inherited from base models.
+        inherited_attributes = set()
         # Do the appropriate setup for any model parents.
-        for base in parents:
-            original_base = base
-            if not hasattr(base, '_meta'):
+        for base in new_class.mro():
+            if base not in parents or not hasattr(base, '_meta'):
                 # Things without _meta aren't functional models, so they're
                 # uninteresting parents.
+                inherited_attributes |= set(base.__dict__.keys())
                 continue
 
             parent_fields = base._meta.local_fields + base._meta.local_many_to_many
-            # Check for clashes between locally declared fields and those
-            # on the base classes (we cannot handle shadowed fields at the
-            # moment).
-            for field in parent_fields:
-                if field.name in field_names:
-                    raise FieldError(
-                        'Local field %r in class %r clashes '
-                        'with field of similar name from '
-                        'base class %r' % (field.name, name, base.__name__)
-                    )
             if not base._meta.abstract:
+                # Check for clashes between locally declared fields and those
+                # on the base classes.
+                for field in parent_fields:
+                    if field.name in field_names:
+                        raise FieldError(
+                            'Local field %r in class %r clashes with field of '
+                            'the same name from base class %r.' % (
+                                field.name,
+                                name,
+                                base.__name__,
+                            )
+                        )
+                    else:
+                        inherited_attributes.add(field.name)
+
                 # Concrete classes...
                 base = base._meta.concrete_model
                 base_key = make_model_tuple(base)
@@ -246,6 +243,18 @@ class ModelBase(type):
                         auto_created=True,
                         parent_link=True,
                     )
+
+                    if attr_name in field_names:
+                        raise FieldError(
+                            "Auto-generated field '%s' in class %r for "
+                            "parent_link to base class %r clashes with "
+                            "declared field of the same name." % (
+                                attr_name,
+                                name,
+                                base.__name__,
+                            )
+                        )
+
                     # Only add the ptr field if it's not already present;
                     # e.g. migrations will already have it specified
                     if not hasattr(new_class, attr_name):
@@ -256,38 +265,45 @@ class ModelBase(type):
             else:
                 base_parents = base._meta.parents.copy()
 
-                # .. and abstract ones.
+                # Add fields from abstract base class if it wasn't overridden.
                 for field in parent_fields:
-                    new_field = copy.deepcopy(field)
-                    new_class.add_to_class(field.name, new_field)
-                    # Replace parent links defined on this base by the new
-                    # field as it will be appropriately resolved if required.
-                    if field.one_to_one:
-                        for parent, parent_link in base_parents.items():
-                            if field == parent_link:
-                                base_parents[parent] = new_field
+                    if (field.name not in field_names and
+                            field.name not in new_class.__dict__ and
+                            field.name not in inherited_attributes):
+                        new_field = copy.deepcopy(field)
+                        new_class.add_to_class(field.name, new_field)
+                        # Replace parent links defined on this base by the new
+                        # field. It will be appropriately resolved if required.
+                        if field.one_to_one:
+                            for parent, parent_link in base_parents.items():
+                                if field == parent_link:
+                                    base_parents[parent] = new_field
 
                 # Pass any non-abstract parent classes onto child.
                 new_class._meta.parents.update(base_parents)
 
-            # Inherit managers from the abstract base classes.
-            new_class.copy_managers(base._meta.abstract_managers)
-
-            # Proxy models inherit the non-abstract managers from their base,
-            # unless they have redefined any of them.
-            if is_proxy:
-                new_class.copy_managers(original_base._meta.concrete_managers)
-
             # Inherit private fields (like GenericForeignKey) from the parent
             # class
             for field in base._meta.private_fields:
-                if base._meta.abstract and field.name in field_names:
-                    raise FieldError(
-                        'Local field %r in class %r clashes '
-                        'with field of similar name from '
-                        'abstract base class %r' % (field.name, name, base.__name__)
-                    )
-                new_class.add_to_class(field.name, copy.deepcopy(field))
+                if field.name in field_names:
+                    if not base._meta.abstract:
+                        raise FieldError(
+                            'Local field %r in class %r clashes with field of '
+                            'the same name from base class %r.' % (
+                                field.name,
+                                name,
+                                base.__name__,
+                            )
+                        )
+                else:
+                    new_class.add_to_class(field.name, copy.deepcopy(field))
+
+        # Set the name of _meta.indexes. This can't be done in
+        # Options.contribute_to_class() because fields haven't been added to
+        # the model at that point.
+        for index in new_class._meta.indexes:
+            if not index.name:
+                index.set_name_with_model(new_class)
 
         if abstract:
             # Abstract base models can't be instantiated and don't appear in
@@ -300,15 +316,6 @@ class ModelBase(type):
         new_class._prepare()
         new_class._meta.apps.register_model(new_class._meta.app_label, new_class)
         return new_class
-
-    def copy_managers(cls, base_managers):
-        # This is in-place sorting of an Options attribute, but that's fine.
-        base_managers.sort()
-        for _, mgr_name, manager in base_managers:  # NOQA (redefinition of _)
-            val = getattr(cls, mgr_name, None)
-            if not val or val is manager:
-                new_manager = manager._copy_to_model(cls)
-                cls.add_to_class(mgr_name, new_manager)
 
     def add_to_class(cls, name, value):
         # We should call the contribute_to_class method only if it's bound
@@ -346,8 +353,98 @@ class ModelBase(type):
         if get_absolute_url_override:
             setattr(cls, 'get_absolute_url', get_absolute_url_override)
 
-        ensure_default_manager(cls)
+        if not opts.managers or cls._requires_legacy_default_manager():
+            if any(f.name == 'objects' for f in opts.fields):
+                raise ValueError(
+                    "Model %s must specify a custom Manager, because it has a "
+                    "field named 'objects'." % cls.__name__
+                )
+            manager = Manager()
+            manager.auto_created = True
+            cls.add_to_class('objects', manager)
+
         signals.class_prepared.send(sender=cls)
+
+    def _requires_legacy_default_manager(cls):  # RemovedInDjango20Warning
+        opts = cls._meta
+
+        if opts.manager_inheritance_from_future:
+            return False
+
+        future_default_manager = opts.default_manager
+
+        # Step 1: Locate a manager that would have been promoted
+        # to default manager with the legacy system.
+        for manager in opts.managers:
+            originating_model = manager._originating_model
+            if (cls is originating_model or cls._meta.proxy or
+                    originating_model._meta.abstract):
+
+                if manager is not cls._default_manager and not opts.default_manager_name:
+                    warnings.warn(
+                        "Managers from concrete parents will soon qualify as default "
+                        "managers if they appear before any other managers in the "
+                        "MRO. As a result, '{legacy_default_manager}' declared on "
+                        "'{legacy_default_manager_model}' will no longer be the "
+                        "default manager for '{model}' in favor of "
+                        "'{future_default_manager}' declared on "
+                        "'{future_default_manager_model}'. "
+                        "You can redeclare '{legacy_default_manager}' on '{cls}' "
+                        "to keep things the way they are or you can switch to the new "
+                        "behavior right away by setting "
+                        "`Meta.manager_inheritance_from_future` to `True`.".format(
+                            cls=cls.__name__,
+                            model=opts.label,
+                            legacy_default_manager=manager.name,
+                            legacy_default_manager_model=manager._originating_model._meta.label,
+                            future_default_manager=future_default_manager.name,
+                            future_default_manager_model=future_default_manager._originating_model._meta.label,
+                        ),
+                        RemovedInDjango20Warning, 2
+                    )
+
+                    opts.default_manager_name = manager.name
+                    opts._expire_cache()
+
+                break
+
+        # Step 2: Since there are managers but none of them qualified as
+        # default managers under the legacy system (meaning that there are
+        # managers from concrete parents that would be promoted under the
+        # new system), we need to create a new Manager instance for the
+        # 'objects' attribute as a deprecation shim.
+        else:
+            # If the "future" default manager was auto created there is no
+            # point warning the user since it's basically the same manager.
+            if not future_default_manager.auto_created:
+                warnings.warn(
+                    "Managers from concrete parents will soon qualify as "
+                    "default managers. As a result, the 'objects' manager "
+                    "won't be created (or recreated) automatically "
+                    "anymore on '{model}' and '{future_default_manager}' "
+                    "declared on '{future_default_manager_model}' will be "
+                    "promoted to default manager. You can declare "
+                    "explicitly `objects = models.Manager()` on '{cls}' "
+                    "to keep things the way they are or you can switch "
+                    "to the new behavior right away by setting "
+                    "`Meta.manager_inheritance_from_future` to `True`.".format(
+                        cls=cls.__name__,
+                        model=opts.label,
+                        future_default_manager=future_default_manager.name,
+                        future_default_manager_model=future_default_manager._originating_model._meta.label,
+                    ),
+                    RemovedInDjango20Warning, 2
+                )
+
+            return True
+
+    @property
+    def _base_manager(cls):
+        return cls._meta.base_manager
+
+    @property
+    def _default_manager(cls):
+        return cls._meta.default_manager
 
 
 class ModelState(object):
@@ -556,7 +653,7 @@ class Model(six.with_metaclass(ModelBase)):
             if f.attname not in self.__dict__
         }
 
-    def refresh_from_db(self, using=None, fields=None, **kwargs):
+    def refresh_from_db(self, using=None, fields=None):
         """
         Reloads field values from the database.
 
@@ -896,8 +993,8 @@ class Model(six.with_metaclass(ModelBase)):
             order = '_order' if is_next else '-_order'
             order_field = self._meta.order_with_respect_to
             filter_args = order_field.get_filter_kwargs_for_object(self)
-            obj = self._default_manager.filter(**filter_args).filter(**{
-                '_order__%s' % op: self._default_manager.values('_order').filter(**{
+            obj = self.__class__._default_manager.filter(**filter_args).filter(**{
+                '_order__%s' % op: self.__class__._default_manager.values('_order').filter(**{
                     self._meta.pk.name: self.pk
                 })
             }).order_by(order)[:1].get()
@@ -997,7 +1094,9 @@ class Model(six.with_metaclass(ModelBase)):
             for field_name in unique_check:
                 f = self._meta.get_field(field_name)
                 lookup_value = getattr(self, f.attname)
-                if lookup_value is None:
+                # TODO: Handle multiple backends with different feature flags.
+                if (lookup_value is None or
+                        (lookup_value == '' and connection.features.interprets_empty_strings_as_nulls)):
                     # no value, skip the lookup
                     continue
                 if f.primary_key and not self._state.adding:
@@ -1234,7 +1333,7 @@ class Model(six.with_metaclass(ModelBase)):
         """ Perform all manager checks. """
 
         errors = []
-        for __, manager, __ in cls._meta.managers:
+        for manager in cls._meta.managers:
             errors.extend(manager.check(**kwargs))
         return errors
 
@@ -1595,6 +1694,10 @@ class Model(six.with_metaclass(ModelBase)):
                 )
 
         for f in cls._meta.local_many_to_many:
+            # Skip nonexistent models.
+            if isinstance(f.remote_field.through, six.string_types):
+                continue
+
             # Check if auto-generated name for the M2M field is too long
             # for the database.
             for m2m in f.remote_field.through._meta.local_fields:

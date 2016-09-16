@@ -30,7 +30,7 @@ from django.forms.widgets import (
 from django.utils import formats, six
 from django.utils.dateparse import parse_duration
 from django.utils.duration import duration_string
-from django.utils.encoding import force_str, force_text, smart_text
+from django.utils.encoding import force_str, force_text
 from django.utils.ipv6 import clean_ipv6_address
 from django.utils.six.moves.urllib.parse import urlsplit, urlunsplit
 from django.utils.translation import ugettext_lazy as _, ungettext_lazy
@@ -214,10 +214,11 @@ class Field(object):
 
 
 class CharField(Field):
-    def __init__(self, max_length=None, min_length=None, strip=True, *args, **kwargs):
+    def __init__(self, max_length=None, min_length=None, strip=True, empty_value='', *args, **kwargs):
         self.max_length = max_length
         self.min_length = min_length
         self.strip = strip
+        self.empty_value = empty_value
         super(CharField, self).__init__(*args, **kwargs)
         if min_length is not None:
             self.validators.append(validators.MinLengthValidator(int(min_length)))
@@ -227,7 +228,7 @@ class CharField(Field):
     def to_python(self, value):
         "Returns a Unicode object."
         if value in self.empty_values:
-            return ''
+            return self.empty_value
         value = force_text(value)
         if self.strip:
             value = value.strip()
@@ -235,10 +236,10 @@ class CharField(Field):
 
     def widget_attrs(self, widget):
         attrs = super(CharField, self).widget_attrs(widget)
-        if self.max_length is not None:
+        if self.max_length is not None and not widget.is_hidden:
             # The HTML attribute is maxlength, not max_length.
             attrs['maxlength'] = str(self.max_length)
-        if self.min_length is not None:
+        if self.min_length is not None and not widget.is_hidden:
             # The HTML attribute is minlength, not min_length.
             attrs['minlength'] = str(self.min_length)
         return attrs
@@ -275,7 +276,7 @@ class IntegerField(Field):
             value = formats.sanitize_separators(value)
         # Strip trailing decimal and zeros.
         try:
-            value = int(self.re_decimal.sub('', str(value)))
+            value = int(self.re_decimal.sub('', force_text(value)))
         except (ValueError, TypeError):
             raise ValidationError(self.error_messages['invalid'], code='invalid')
         return value
@@ -348,7 +349,7 @@ class DecimalField(IntegerField):
             return None
         if self.localize:
             value = formats.sanitize_separators(value)
-        value = smart_text(value).strip()
+        value = force_text(value).strip()
         try:
             value = Decimal(value)
         except DecimalException:
@@ -531,9 +532,8 @@ class EmailField(CharField):
     widget = EmailInput
     default_validators = [validators.validate_email]
 
-    def clean(self, value):
-        value = self.to_python(value).strip()
-        return super(EmailField, self).clean(value)
+    def __init__(self, *args, **kwargs):
+        super(EmailField, self).__init__(*args, strip=True, **kwargs)
 
 
 class FileField(Field):
@@ -664,6 +664,9 @@ class URLField(CharField):
     }
     default_validators = [validators.URLValidator()]
 
+    def __init__(self, *args, **kwargs):
+        super(URLField, self).__init__(*args, strip=True, **kwargs)
+
     def to_python(self, value):
 
         def split_url(url):
@@ -694,10 +697,6 @@ class URLField(CharField):
                 url_fields = split_url(urlunsplit(url_fields))
             value = urlunsplit(url_fields)
         return value
-
-    def clean(self, value):
-        value = self.to_python(value).strip()
-        return super(URLField, self).clean(value)
 
 
 class BooleanField(Field):
@@ -800,7 +799,7 @@ class ChoiceField(Field):
         "Returns a Unicode object."
         if value in self.empty_values:
             return ''
-        return smart_text(value)
+        return force_text(value)
 
     def validate(self, value):
         """
@@ -869,7 +868,7 @@ class MultipleChoiceField(ChoiceField):
             return []
         elif not isinstance(value, (list, tuple)):
             raise ValidationError(self.error_messages['invalid_list'], code='invalid_list')
-        return [smart_text(val) for val in value]
+        return [force_text(val) for val in value]
 
     def validate(self, value):
         """

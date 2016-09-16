@@ -6,8 +6,9 @@ from django.utils import six
 
 from .models import (
     Book, Car, CustomManager, CustomQuerySet, DeconstructibleCustomManager,
-    FunPerson, OneToOneRestrictedModel, Person, PersonFromAbstract,
-    PersonManager, PublishedBookManager, RelatedModel, RestrictedModel,
+    FastCarAsBase, FastCarAsDefault, FunPerson, OneToOneRestrictedModel,
+    Person, PersonFromAbstract, PersonManager, PublishedBookManager,
+    RelatedModel, RestrictedModel,
 )
 
 
@@ -69,12 +70,12 @@ class CustomManagerTests(TestCase):
             manager = getattr(Person, manager_name)
             queryset = manager.filter()
             self.assertQuerysetEqual(queryset, ["Bugs Bunny"], six.text_type)
-            self.assertEqual(queryset._filter_CustomQuerySet, True)
+            self.assertIs(queryset._filter_CustomQuerySet, True)
 
             # Test that specialized querysets inherit from our custom queryset.
             queryset = manager.values_list('first_name', flat=True).filter()
             self.assertEqual(list(queryset), [six.text_type("Bugs")])
-            self.assertEqual(queryset._filter_CustomQuerySet, True)
+            self.assertIs(queryset._filter_CustomQuerySet, True)
 
             self.assertIsInstance(queryset.values(), CustomQuerySet)
             self.assertIsInstance(queryset.values().values(), CustomQuerySet)
@@ -101,7 +102,7 @@ class CustomManagerTests(TestCase):
         """
         queryset = Person.custom_queryset_custom_manager.filter()
         self.assertQuerysetEqual(queryset, ["Bugs Bunny"], six.text_type)
-        self.assertEqual(queryset._filter_CustomManager, True)
+        self.assertIs(queryset._filter_CustomManager, True)
 
     def test_related_manager(self):
         """
@@ -554,6 +555,34 @@ class TestCars(TestCase):
         # alternate manager
         self.assertQuerysetEqual(
             Car.fast_cars.all(), [
+                "Corvette",
+            ],
+            lambda c: c.name
+        )
+        # explicit default manager
+        self.assertQuerysetEqual(
+            FastCarAsDefault.cars.order_by("name"), [
+                "Corvette",
+                "Neon",
+            ],
+            lambda c: c.name
+        )
+        self.assertQuerysetEqual(
+            FastCarAsDefault._default_manager.all(), [
+                "Corvette",
+            ],
+            lambda c: c.name
+        )
+        # explicit base manager
+        self.assertQuerysetEqual(
+            FastCarAsBase.cars.order_by("name"), [
+                "Corvette",
+                "Neon",
+            ],
+            lambda c: c.name
+        )
+        self.assertQuerysetEqual(
+            FastCarAsBase._base_manager.all(), [
                 "Corvette",
             ],
             lambda c: c.name

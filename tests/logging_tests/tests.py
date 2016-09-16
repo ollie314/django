@@ -48,10 +48,10 @@ class LoggingFiltersTest(SimpleTestCase):
         filter_ = RequireDebugFalse()
 
         with self.settings(DEBUG=True):
-            self.assertEqual(filter_.filter("record is not used"), False)
+            self.assertIs(filter_.filter("record is not used"), False)
 
         with self.settings(DEBUG=False):
-            self.assertEqual(filter_.filter("record is not used"), True)
+            self.assertIs(filter_.filter("record is not used"), True)
 
     def test_require_debug_true_filter(self):
         """
@@ -60,10 +60,10 @@ class LoggingFiltersTest(SimpleTestCase):
         filter_ = RequireDebugTrue()
 
         with self.settings(DEBUG=True):
-            self.assertEqual(filter_.filter("record is not used"), True)
+            self.assertIs(filter_.filter("record is not used"), True)
 
         with self.settings(DEBUG=False):
-            self.assertEqual(filter_.filter("record is not used"), False)
+            self.assertIs(filter_.filter("record is not used"), False)
 
 
 class SetupDefaultLoggingMixin(object):
@@ -125,7 +125,7 @@ class HandlerLoggingTests(SetupDefaultLoggingMixin, LoggingCaptureMixin, SimpleT
     DEBUG=True,
     USE_I18N=True,
     LANGUAGES=[('en', 'English')],
-    MIDDLEWARE_CLASSES=[
+    MIDDLEWARE=[
         'django.middleware.locale.LocaleMiddleware',
         'django.middleware.common.CommonMiddleware',
     ],

@@ -10,8 +10,8 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import DEFAULT_DB_ALIAS
 from django.db.backends.base.base import BaseDatabaseWrapper
-from django.db.backends.base.validation import BaseDatabaseValidation
 from django.db.utils import DatabaseError as WrappedDatabaseError
+from django.utils import six
 from django.utils.encoding import force_str
 from django.utils.functional import cached_property
 from django.utils.safestring import SafeBytes, SafeText
@@ -47,8 +47,9 @@ from .version import get_version                            # NOQA isort:skip
 DatabaseError = Database.DatabaseError
 IntegrityError = Database.IntegrityError
 
-psycopg2.extensions.register_type(psycopg2.extensions.UNICODE)
-psycopg2.extensions.register_type(psycopg2.extensions.UNICODEARRAY)
+if six.PY2:
+    psycopg2.extensions.register_type(psycopg2.extensions.UNICODE)
+    psycopg2.extensions.register_type(psycopg2.extensions.UNICODEARRAY)
 psycopg2.extensions.register_adapter(SafeBytes, psycopg2.extensions.QuotedString)
 psycopg2.extensions.register_adapter(SafeText, psycopg2.extensions.QuotedString)
 psycopg2.extras.register_uuid()
@@ -139,16 +140,12 @@ class DatabaseWrapper(BaseDatabaseWrapper):
 
     Database = Database
     SchemaEditorClass = DatabaseSchemaEditor
-
-    def __init__(self, *args, **kwargs):
-        super(DatabaseWrapper, self).__init__(*args, **kwargs)
-
-        self.features = DatabaseFeatures(self)
-        self.ops = DatabaseOperations(self)
-        self.client = DatabaseClient(self)
-        self.creation = DatabaseCreation(self)
-        self.introspection = DatabaseIntrospection(self)
-        self.validation = BaseDatabaseValidation(self)
+    # Classes instantiated in __init__().
+    client_class = DatabaseClient
+    creation_class = DatabaseCreation
+    features_class = DatabaseFeatures
+    introspection_class = DatabaseIntrospection
+    ops_class = DatabaseOperations
 
     def get_connection_params(self):
         settings_dict = self.settings_dict
@@ -192,17 +189,21 @@ class DatabaseWrapper(BaseDatabaseWrapper):
 
         return connection
 
+    def ensure_timezone(self):
+        self.ensure_connection()
+        conn_timezone_name = self.connection.get_parameter_status('TimeZone')
+        timezone_name = self.timezone_name
+        if timezone_name and conn_timezone_name != timezone_name:
+            with self.connection.cursor() as cursor:
+                cursor.execute(self.ops.set_time_zone_sql(), [timezone_name])
+            return True
+        return False
+
     def init_connection_state(self):
         self.connection.set_client_encoding('UTF8')
 
-        conn_timezone_name = self.connection.get_parameter_status('TimeZone')
-
-        if self.timezone_name and conn_timezone_name != self.timezone_name:
-            cursor = self.connection.cursor()
-            try:
-                cursor.execute(self.ops.set_time_zone_sql(), [self.timezone_name])
-            finally:
-                cursor.close()
+        timezone_changed = self.ensure_timezone()
+        if timezone_changed:
             # Commit after setting the time zone (see #17062)
             if not self.get_autocommit():
                 self.connection.commit()

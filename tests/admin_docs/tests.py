@@ -3,12 +3,13 @@ import unittest
 
 from django.conf import settings
 from django.contrib.admindocs import utils
-from django.contrib.admindocs.views import get_return_data_type
+from django.contrib.admindocs.views import get_return_data_type, simplify_regex
 from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 from django.test import TestCase, modify_settings, override_settings
 from django.test.utils import captured_stderr
 from django.urls import reverse
+from django.utils import six
 
 from .models import Company, Person
 
@@ -82,11 +83,29 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
         self.assertContains(response, 'Views by namespace test')
         self.assertContains(response, 'Name: <code>test:func</code>.')
 
+    @unittest.skipIf(six.PY2, "Python 2 doesn't support __qualname__.")
+    def test_view_index_with_method(self):
+        """
+        Views that are methods are listed correctly.
+        """
+        response = self.client.get(reverse('django-admindocs-views-index'))
+        self.assertContains(
+            response,
+            '<h3><a href="/admindocs/views/django.contrib.admin.sites.AdminSite.index/">/admin/</a></h3>',
+            html=True
+        )
+
     def test_view_detail(self):
         url = reverse('django-admindocs-views-detail', args=['django.contrib.admindocs.views.BaseAdminDocsView'])
         response = self.client.get(url)
         # View docstring
         self.assertContains(response, 'Base view for admindocs views.')
+
+    @override_settings(ROOT_URLCONF='admin_docs.namespace_urls')
+    def test_namespaced_view_detail(self):
+        url = reverse('django-admindocs-views-detail', args=['admin_docs.views.XViewClass'])
+        response = self.client.get(url)
+        self.assertContains(response, '<h1>admin_docs.views.XViewClass</h1>')
 
     def test_view_detail_illegal_import(self):
         """
@@ -96,6 +115,14 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
         self.assertNotIn("urlpatterns_reverse.nonimported_module", sys.modules)
+
+    def test_view_detail_as_method(self):
+        """
+        Views that are methods can be displayed.
+        """
+        url = reverse('django-admindocs-views-detail', args=['django.contrib.admin.sites.AdminSite.index'])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200 if six.PY3 else 404)
 
     def test_model_index(self):
         response = self.client.get(reverse('django-admindocs-models-index'))
@@ -122,6 +149,15 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
             self.assertContains(response, '<h1 id="site-name"><a href="/admin/">Django administration</a></h1>')
         finally:
             utils.docutils_is_available = True
+
+    def test_simplify_regex(self):
+        tests = (
+            ('^a', '/a'),
+            ('^(?P<a>\w+)/b/(?P<c>\w+)/$', '/<a>/b/<c>/'),
+            ('^(?P<a>\w+)/b/(?P<c>\w+)$', '/<a>/b/<c>'),
+        )
+        for pattern, output in tests:
+            self.assertEqual(simplify_regex(pattern), output)
 
 
 @override_settings(TEMPLATES=[{

@@ -85,7 +85,7 @@ class ModelInstanceCreationTests(TestCase):
         a = Article(headline='Article 5', pub_date=datetime(2005, 7, 31))
         a.save()
         self.assertEqual(a.headline, 'Article 5')
-        self.assertNotEqual(a.id, None)
+        self.assertIsNotNone(a.id)
 
     def test_leaving_off_a_field_with_default_set_the_default_will_be_saved(self):
         a = Article(pub_date=datetime(2005, 7, 31))
@@ -358,7 +358,7 @@ class ModelTest(TestCase):
         with self.assertRaises(TypeError):
             EmptyQuerySet()
         self.assertIsInstance(Article.objects.none(), EmptyQuerySet)
-        self.assertFalse(isinstance('', EmptyQuerySet))
+        self.assertNotIsInstance('', EmptyQuerySet)
 
     def test_emptyqs_values(self):
         # test for #15959
@@ -420,6 +420,19 @@ class ModelTest(TestCase):
             # No PK value -> unhashable (because save() would then change
             # hash)
             hash(Article())
+
+    def test_delete_and_access_field(self):
+        # Accessing a field after it's deleted from a model reloads its value.
+        pub_date = datetime.now()
+        article = Article.objects.create(headline='foo', pub_date=pub_date)
+        new_pub_date = article.pub_date + timedelta(days=10)
+        article.headline = 'bar'
+        article.pub_date = new_pub_date
+        del article.headline
+        with self.assertNumQueries(1):
+            self.assertEqual(article.headline, 'foo')
+        # Fields that weren't deleted aren't reloaded.
+        self.assertEqual(article.pub_date, new_pub_date)
 
 
 class ModelLookupTest(TestCase):
@@ -637,7 +650,7 @@ class SelectOnSaveTests(TestCase):
         # test this properly otherwise. Article's manager, because
         # proxy models use their parent model's _base_manager.
 
-        orig_class = Article._base_manager.__class__
+        orig_class = Article._base_manager._queryset_class
 
         class FakeQuerySet(QuerySet):
             # Make sure the _update method below is in fact called.
@@ -648,11 +661,8 @@ class SelectOnSaveTests(TestCase):
                 super(FakeQuerySet, self)._update(*args, **kwargs)
                 return 0
 
-        class FakeManager(orig_class):
-            def get_queryset(self):
-                return FakeQuerySet(self.model)
         try:
-            Article._base_manager.__class__ = FakeManager
+            Article._base_manager._queryset_class = FakeQuerySet
             asos = ArticleSelectOnSave.objects.create(pub_date=datetime.now())
             with self.assertNumQueries(3):
                 asos.save()
@@ -665,7 +675,7 @@ class SelectOnSaveTests(TestCase):
             with self.assertRaises(DatabaseError):
                 asos.save(update_fields=['pub_date'])
         finally:
-            Article._base_manager.__class__ = orig_class
+            Article._base_manager._queryset_class = orig_class
 
 
 class ModelRefreshTests(TestCase):
@@ -692,6 +702,11 @@ class ModelRefreshTests(TestCase):
         with self.assertNumQueries(1):
             a.refresh_from_db()
             self.assertEqual(a.pub_date, new_pub_date)
+
+    def test_unknown_kwarg(self):
+        s = SelfRef.objects.create()
+        with self.assertRaises(TypeError):
+            s.refresh_from_db(unknown_kwarg=10)
 
     def test_refresh_fk(self):
         s1 = SelfRef.objects.create()

@@ -43,11 +43,13 @@ If ``True``, Django will store empty values as ``NULL`` in the database. Default
 is ``False``.
 
 Avoid using :attr:`~Field.null` on string-based fields such as
-:class:`CharField` and :class:`TextField` because empty string values will
-always be stored as empty strings, not as ``NULL``. If a string-based field has
+:class:`CharField` and :class:`TextField`. If a string-based field has
 ``null=True``, that means it has two possible values for "no data": ``NULL``,
 and the empty string. In most cases, it's redundant to have two possible values
-for "no data;" the Django convention is to use the empty string, not ``NULL``.
+for "no data;" the Django convention is to use the empty string, not
+``NULL``. One exception is when a :class:`CharField` has both ``unique=True``
+and ``blank=True`` set. In this situation, ``null=True`` is required to avoid
+unique constraint violations when saving multiple objects with blank values.
 
 For both string-based and non-string-based fields, you will also need to
 set ``blank=True`` if you wish to permit empty values in forms, as the
@@ -112,9 +114,11 @@ define a suitably-named constant for each value::
             (JUNIOR, 'Junior'),
             (SENIOR, 'Senior'),
         )
-        year_in_school = models.CharField(max_length=2,
-                                          choices=YEAR_IN_SCHOOL_CHOICES,
-                                          default=FRESHMAN)
+        year_in_school = models.CharField(
+            max_length=2,
+            choices=YEAR_IN_SCHOOL_CHOICES,
+            default=FRESHMAN,
+        )
 
         def is_upperclass(self):
             return self.year_in_school in (self.JUNIOR, self.SENIOR)
@@ -205,20 +209,20 @@ support tablespaces for indexes, this option is ignored.
 The default value for the field. This can be a value or a callable object. If
 callable it will be called every time a new object is created.
 
-The default cannot be a mutable object (model instance, list, set, etc.), as a
-reference to the same instance of that object would be used as the default
+The default can't be a mutable object (model instance, ``list``, ``set``, etc.),
+as a reference to the same instance of that object would be used as the default
 value in all new model instances. Instead, wrap the desired default in a
-callable.  For example, if you had a custom ``JSONField`` and wanted to specify
-a dictionary as the default, use a function as follows::
+callable. For example, if you want to specify a default ``dict`` for
+:class:`~django.contrib.postgres.fields.JSONField`, use a function::
 
     def contact_default():
         return {"email": "to1@example.com"}
 
     contact_info = JSONField("ContactInfo", default=contact_default)
 
-Note that ``lambda``\s cannot be used for field options like ``default``
-because they cannot be :ref:`serialized by migrations <migration-serializing>`.
-See that documentation for other caveats.
+``lambda``\s can't be used for field options like ``default`` because they
+can't be :ref:`serialized by migrations <migration-serializing>`. See that
+documentation for other caveats.
 
 For fields like :class:`ForeignKey` that map to model instances, defaults
 should be the value of the field they reference (``pk`` unless
@@ -1064,8 +1068,6 @@ of some other value.  You can do this automatically in the admin using
 
 .. attribute:: SlugField.allow_unicode
 
-    .. versionadded:: 1.9
-
     If ``True``, the field accepts Unicode letters in addition to ASCII
     letters. Defaults to ``False``.
 
@@ -1164,12 +1166,6 @@ Django also defines a set of fields that represent relations.
 
 A many-to-one relationship. Requires a positional argument: the class to which
 the model is related.
-
-.. versionchanged:: 1.9
-
-    ``on_delete`` can now be used as the second positional argument (previously
-    it was typically only passed as a keyword argument). It will be a required
-    argument in Django 2.0.
 
 .. _recursive-relationships:
 
@@ -1671,12 +1667,6 @@ relationship at the database level.
 A one-to-one relationship. Conceptually, this is similar to a
 :class:`ForeignKey` with :attr:`unique=True <Field.unique>`, but the
 "reverse" side of the relation will directly return a single object.
-
-.. versionchanged:: 1.9
-
-    ``on_delete`` can now be used as the second positional argument (previously
-    it was typically only passed as a keyword argument). It will be a required
-    argument in Django 2.0.
 
 This is most useful as the primary key of a model which "extends"
 another model in some way; :ref:`multi-table-inheritance` is

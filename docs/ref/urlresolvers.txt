@@ -65,7 +65,7 @@ This ``current_app`` argument is used as a hint to resolve application
 namespaces into URLs on specific application instances, according to the
 :ref:`namespaced URL resolution strategy <topics-http-reversing-url-namespaces>`.
 
-The ``urlconf`` argument is the URLconf module containing the url patterns to
+The ``urlconf`` argument is the URLconf module containing the URL patterns to
 use for reversing. By default, the root URLconf for the current thread is used.
 
 .. note::
@@ -143,8 +143,6 @@ If the URL does not resolve, the function raises a
         URL.
 
     .. attribute:: ResolverMatch.app_names
-
-        .. versionadded:: 1.9
 
         The list of individual namespace components in the full
         application namespace for the URL pattern that matches the URL.

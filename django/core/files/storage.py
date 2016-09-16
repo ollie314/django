@@ -254,8 +254,6 @@ class FileSystemStorage(Storage):
     def __init__(self, location=None, base_url=None, file_permissions_mode=None,
                  directory_permissions_mode=None):
         self._location = location
-        if base_url is not None and not base_url.endswith('/'):
-            base_url += '/'
         self._base_url = base_url
         self._file_permissions_mode = file_permissions_mode
         self._directory_permissions_mode = directory_permissions_mode
@@ -286,6 +284,8 @@ class FileSystemStorage(Storage):
 
     @cached_property
     def base_url(self):
+        if self._base_url is not None and not self._base_url.endswith('/'):
+            self._base_url += '/'
         return self._value_or_setting(self._base_url, settings.MEDIA_URL)
 
     @cached_property
@@ -380,15 +380,13 @@ class FileSystemStorage(Storage):
         assert name, "The name argument is not allowed to be empty."
         name = self.path(name)
         # If the file exists, delete it from the filesystem.
-        # Note that there is a race between os.path.exists and os.remove:
-        # if os.remove fails with ENOENT, the file was removed
-        # concurrently, and we can continue normally.
-        if os.path.exists(name):
-            try:
-                os.remove(name)
-            except OSError as e:
-                if e.errno != errno.ENOENT:
-                    raise
+        # If os.remove() fails with ENOENT, the file may have been removed
+        # concurrently, and it's safe to continue normally.
+        try:
+            os.remove(name)
+        except OSError as e:
+            if e.errno != errno.ENOENT:
+                raise
 
     def exists(self, name):
         return os.path.exists(self.path(name))

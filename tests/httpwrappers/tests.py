@@ -25,7 +25,7 @@ from django.utils.encoding import force_str
 from django.utils.functional import lazystr
 
 
-class QueryDictTests(unittest.TestCase):
+class QueryDictTests(SimpleTestCase):
     def test_create_with_no_args(self):
         self.assertEqual(QueryDict(), QueryDict(str('')))
 
@@ -59,8 +59,8 @@ class QueryDictTests(unittest.TestCase):
         q = QueryDict()
         self.assertEqual(q.getlist('foo'), [])
         if six.PY2:
-            self.assertEqual(q.has_key('foo'), False)
-        self.assertEqual('foo' in q, False)
+            self.assertIs(q.has_key('foo'), False)
+        self.assertNotIn('foo', q)
         self.assertEqual(list(six.iteritems(q)), [])
         self.assertEqual(list(six.iterlists(q)), [])
         self.assertEqual(list(six.iterkeys(q)), [])
@@ -203,11 +203,11 @@ class QueryDictTests(unittest.TestCase):
             q.appendlist('foo', ['bar'])
 
         if six.PY2:
-            self.assertEqual(q.has_key('vote'), True)
-        self.assertEqual('vote' in q, True)
+            self.assertIs(q.has_key('vote'), True)
+        self.assertIn('vote', q)
         if six.PY2:
-            self.assertEqual(q.has_key('foo'), False)
-        self.assertEqual('foo' in q, False)
+            self.assertIs(q.has_key('foo'), False)
+        self.assertNotIn('foo', q)
         self.assertEqual(list(six.iteritems(q)), [('vote', 'no')])
         self.assertEqual(list(six.iterlists(q)), [('vote', ['yes', 'no'])])
         self.assertEqual(list(six.iterkeys(q)), ['vote'])
@@ -243,13 +243,13 @@ class QueryDictTests(unittest.TestCase):
     def test_pickle(self):
         q = QueryDict()
         q1 = pickle.loads(pickle.dumps(q, 2))
-        self.assertEqual(q == q1, True)
+        self.assertEqual(q, q1)
         q = QueryDict(str('a=b&c=d'))
         q1 = pickle.loads(pickle.dumps(q, 2))
-        self.assertEqual(q == q1, True)
+        self.assertEqual(q, q1)
         q = QueryDict(str('a=b&c=d&a=1'))
         q1 = pickle.loads(pickle.dumps(q, 2))
-        self.assertEqual(q == q1, True)
+        self.assertEqual(q, q1)
 
     def test_update_from_querydict(self):
         """Regression test for #8278: QueryDict.update(QueryDict)"""
@@ -270,6 +270,44 @@ class QueryDictTests(unittest.TestCase):
         self.assertEqual(q.urlencode(), 'cur=%A4')
         self.assertEqual(copy.copy(q).encoding, 'iso-8859-15')
         self.assertEqual(copy.deepcopy(q).encoding, 'iso-8859-15')
+
+    def test_querydict_fromkeys(self):
+        self.assertEqual(QueryDict.fromkeys(['key1', 'key2', 'key3']), QueryDict('key1&key2&key3'))
+
+    def test_fromkeys_with_nonempty_value(self):
+        self.assertEqual(
+            QueryDict.fromkeys(['key1', 'key2', 'key3'], value='val'),
+            QueryDict('key1=val&key2=val&key3=val')
+        )
+
+    def test_fromkeys_is_immutable_by_default(self):
+        # Match behavior of __init__() which is also immutable by default.
+        q = QueryDict.fromkeys(['key1', 'key2', 'key3'])
+        with self.assertRaisesMessage(AttributeError, 'This QueryDict instance is immutable'):
+            q['key4'] = 'nope'
+
+    def test_fromkeys_mutable_override(self):
+        q = QueryDict.fromkeys(['key1', 'key2', 'key3'], mutable=True)
+        q['key4'] = 'yep'
+        self.assertEqual(q, QueryDict('key1&key2&key3&key4=yep'))
+
+    def test_duplicates_in_fromkeys_iterable(self):
+        self.assertEqual(QueryDict.fromkeys('xyzzy'), QueryDict('x&y&z&z&y'))
+
+    def test_fromkeys_with_nondefault_encoding(self):
+        key_utf16 = b'\xff\xfe\x8e\x02\xdd\x01\x9e\x02'
+        value_utf16 = b'\xff\xfe\xdd\x01n\x00l\x00P\x02\x8c\x02'
+        q = QueryDict.fromkeys([key_utf16], value=value_utf16, encoding='utf-16')
+        expected = QueryDict('', mutable=True)
+        expected['ʎǝʞ'] = 'ǝnlɐʌ'
+        self.assertEqual(q, expected)
+
+    def test_fromkeys_empty_iterable(self):
+        self.assertEqual(QueryDict.fromkeys([]), QueryDict(''))
+
+    def test_fromkeys_noniterable(self):
+        with self.assertRaises(TypeError):
+            QueryDict.fromkeys(0)
 
 
 class HttpResponseTests(unittest.TestCase):
@@ -352,7 +390,7 @@ class HttpResponseTests(unittest.TestCase):
         Test for bug #14020: Make HttpResponse.get work like dict.get
         """
         r = HttpResponse()
-        self.assertEqual(r.get('test'), None)
+        self.assertIsNone(r.get('test'))
 
     def test_non_string_content(self):
         # Bug 16494: HttpResponse should behave consistently with non-strings
@@ -439,7 +477,7 @@ class HttpResponseTests(unittest.TestCase):
         self.assertEqual(r.getvalue(), b'asdf')
 
         r = HttpResponse()
-        self.assertEqual(r.writable(), True)
+        self.assertIs(r.writable(), True)
         r.writelines(['foo\n', 'bar\n', 'baz\n'])
         self.assertEqual(r.content, b'foo\nbar\nbaz\n')
 

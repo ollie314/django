@@ -112,7 +112,7 @@ class CachedLoaderTests(SimpleTestCase):
         """
         loader = self.engine.template_loaders[0]
 
-        self.assertFalse('missing.html' in loader.template_cache)
+        self.assertNotIn('missing.html', loader.template_cache)
 
         with self.assertRaises(TemplateDoesNotExist):
             loader.load_template("missing.html")
@@ -279,7 +279,7 @@ class FileSystemLoaderTests(SimpleTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.engine = Engine(dirs=[TEMPLATE_DIR])
+        cls.engine = Engine(dirs=[TEMPLATE_DIR], loaders=['django.template.loaders.filesystem.Loader'])
         super(FileSystemLoaderTests, cls).setUpClass()
 
     @contextmanager

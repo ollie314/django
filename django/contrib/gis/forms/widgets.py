@@ -46,7 +46,7 @@ class BaseGeometryWidget(Widget):
     def render(self, name, value, attrs=None):
         # If a string reaches here (via a validation error on another
         # field) then just reconstruct the Geometry.
-        if isinstance(value, six.string_types):
+        if value and isinstance(value, six.string_types):
             value = self.deserialize(value)
 
         if value:
@@ -79,7 +79,7 @@ class OpenLayersWidget(BaseGeometryWidget):
 
     class Media:
         js = (
-            'http://openlayers.org/api/2.13.1/OpenLayers.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/openlayers/2.13.1/OpenLayers.js',
             'gis/js/OLMapWidget.js',
         )
 
@@ -91,10 +91,11 @@ class OSMWidget(BaseGeometryWidget):
     template_name = 'gis/openlayers-osm.html'
     default_lon = 5
     default_lat = 47
+    map_srid = 3857
 
     class Media:
         js = (
-            'http://openlayers.org/api/2.13.1/OpenLayers.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/openlayers/2.13.1/OpenLayers.js',
             'gis/js/OLMapWidget.js',
         )
 
@@ -104,12 +105,3 @@ class OSMWidget(BaseGeometryWidget):
             self.attrs[key] = getattr(self, key)
         if attrs:
             self.attrs.update(attrs)
-
-    @property
-    def map_srid(self):
-        # Use the official spherical mercator projection SRID when GDAL is
-        # available; otherwise, fallback to 900913.
-        if gdal.HAS_GDAL:
-            return 3857
-        else:
-            return 900913

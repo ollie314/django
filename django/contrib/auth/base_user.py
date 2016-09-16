@@ -4,6 +4,8 @@ not in INSTALLED_APPS.
 """
 from __future__ import unicode_literals
 
+import unicodedata
+
 from django.contrib.auth import password_validation
 from django.contrib.auth.hashers import (
     check_password, is_password_usable, make_password,
@@ -11,7 +13,7 @@ from django.contrib.auth.hashers import (
 from django.db import models
 from django.utils.crypto import get_random_string, salted_hmac
 from django.utils.deprecation import CallableFalse, CallableTrue
-from django.utils.encoding import python_2_unicode_compatible
+from django.utils.encoding import force_text, python_2_unicode_compatible
 from django.utils.translation import ugettext_lazy as _
 
 
@@ -70,6 +72,9 @@ class AbstractBaseUser(models.Model):
 
     def __str__(self):
         return self.get_username()
+
+    def clean(self):
+        setattr(self, self.USERNAME_FIELD, self.normalize_username(self.get_username()))
 
     def save(self, *args, **kwargs):
         super(AbstractBaseUser, self).save(*args, **kwargs)
@@ -131,3 +136,7 @@ class AbstractBaseUser(models.Model):
         """
         key_salt = "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"
         return salted_hmac(key_salt, self.password).hexdigest()
+
+    @classmethod
+    def normalize_username(cls, username):
+        return unicodedata.normalize('NFKC', force_text(username))

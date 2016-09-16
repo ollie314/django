@@ -239,7 +239,6 @@ environ
 escapejs
 esque
 Ess
-Etag
 ETag
 ETags
 exe
@@ -498,6 +497,7 @@ multiline
 multilinestring
 multipart
 multipolygon
+multitenancy
 multithreaded
 multithreading
 Mumbai
@@ -593,6 +593,7 @@ prefetches
 prefetching
 prefork
 preforked
+preload
 prepend
 prepended
 prepending
@@ -840,6 +841,7 @@ Tomek
 toolbar
 toolkits
 toolset
+Tox
 trac
 tracebacks
 transactional
@@ -972,6 +974,7 @@ wordcount
 wordwrap
 workflow
 worksforme
+wrappable
 wsgi
 www
 xe

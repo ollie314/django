@@ -63,7 +63,25 @@ class MigrationExecutor(object):
                         applied.add(migration)
         return plan
 
-    def migrate(self, targets, plan=None, fake=False, fake_initial=False):
+    def _create_project_state(self, with_applied_migrations=False):
+        """
+        Create a project state including all the applications without
+        migrations and applied migrations if with_applied_migrations=True.
+        """
+        state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
+        if with_applied_migrations:
+            # Create the forwards plan Django would follow on an empty database
+            full_plan = self.migration_plan(self.loader.graph.leaf_nodes(), clean_start=True)
+            applied_migrations = {
+                self.loader.graph.nodes[key] for key in self.loader.applied_migrations
+                if key in self.loader.graph.nodes
+            }
+            for migration, _ in full_plan:
+                if migration in applied_migrations:
+                    migration.mutate_state(state, preserve=False)
+        return state
+
+    def migrate(self, targets, plan=None, state=None, fake=False, fake_initial=False):
         """
         Migrates the database up to the given targets.
 
@@ -79,7 +97,9 @@ class MigrationExecutor(object):
         all_backwards = all(backwards for mig, backwards in plan)
 
         if not plan:
-            pass  # Nothing to do for an empty plan
+            if state is None:
+                # The resulting state should include applied migrations.
+                state = self._create_project_state(with_applied_migrations=True)
         elif all_forwards == all_backwards:
             # This should only happen if there's a mixed plan
             raise InvalidMigrationPlan(
@@ -89,24 +109,28 @@ class MigrationExecutor(object):
                 plan
             )
         elif all_forwards:
-            self._migrate_all_forwards(plan, full_plan, fake=fake, fake_initial=fake_initial)
+            if state is None:
+                # The resulting state should still include applied migrations.
+                state = self._create_project_state(with_applied_migrations=True)
+            state = self._migrate_all_forwards(state, plan, full_plan, fake=fake, fake_initial=fake_initial)
         else:
             # No need to check for `elif all_backwards` here, as that condition
             # would always evaluate to true.
-            self._migrate_all_backwards(plan, full_plan, fake=fake)
+            state = self._migrate_all_backwards(plan, full_plan, fake=fake)
 
         self.check_replacements()
 
-    def _migrate_all_forwards(self, plan, full_plan, fake, fake_initial):
+        return state
+
+    def _migrate_all_forwards(self, state, plan, full_plan, fake, fake_initial):
         """
         Take a list of 2-tuples of the form (migration instance, False) and
         apply them in the order they occur in the full_plan.
         """
         migrations_to_run = {m[0] for m in plan}
-        state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
         for migration, _ in full_plan:
             if not migrations_to_run:
-                # We remove every migration that we applied from this set so
+                # We remove every migration that we applied from these sets so
                 # that we can bail out once the last migration has been applied
                 # and don't always run until the very end of the migration
                 # process.
@@ -120,8 +144,8 @@ class MigrationExecutor(object):
                         self.progress_callback("render_success")
                 state = self.apply_migration(state, migration, fake=fake, fake_initial=fake_initial)
                 migrations_to_run.remove(migration)
-            else:
-                migration.mutate_state(state, preserve=False)
+
+        return state
 
     def _migrate_all_backwards(self, plan, full_plan, fake):
         """
@@ -136,7 +160,11 @@ class MigrationExecutor(object):
         migrations_to_run = {m[0] for m in plan}
         # Holds all migration states prior to the migrations being unapplied
         states = {}
-        state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
+        state = self._create_project_state()
+        applied_migrations = {
+            self.loader.graph.nodes[key] for key in self.loader.applied_migrations
+            if key in self.loader.graph.nodes
+        }
         if self.progress_callback:
             self.progress_callback("render_start")
         for migration, _ in full_plan:
@@ -154,13 +182,31 @@ class MigrationExecutor(object):
                 # The old state keeps as-is, we continue with the new state
                 state = migration.mutate_state(state, preserve=True)
                 migrations_to_run.remove(migration)
-            else:
+            elif migration in applied_migrations:
+                # Only mutate the state if the migration is actually applied
+                # to make sure the resulting state doesn't include changes
+                # from unrelated migrations.
                 migration.mutate_state(state, preserve=False)
         if self.progress_callback:
             self.progress_callback("render_success")
 
         for migration, _ in plan:
             self.unapply_migration(states[migration], migration, fake=fake)
+            applied_migrations.remove(migration)
+
+        # Generate the post migration state by starting from the state before
+        # the last migration is unapplied and mutating it to include all the
+        # remaining applied migrations.
+        last_unapplied_migration = plan[-1][0]
+        state = states[last_unapplied_migration]
+        for index, (migration, _) in enumerate(full_plan):
+            if migration == last_unapplied_migration:
+                for migration, _ in full_plan[index:]:
+                    if migration in applied_migrations:
+                        migration.mutate_state(state, preserve=False)
+                break
+
+        return state
 
     def collect_sql(self, plan):
         """

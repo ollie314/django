@@ -223,12 +223,9 @@ class GISFunctionsTests(TestCase):
         geom = Point(5, 23, srid=4326)
         qs = Country.objects.annotate(inter=functions.Intersection('mpoly', geom))
         for c in qs:
-            if spatialite or mysql:
-                # When the intersection is empty, Spatialite and MySQL return None
+            if spatialite or (mysql and not connection.ops.uses_invalid_empty_geometry_collection) or oracle:
+                # When the intersection is empty, some databases return None.
                 expected = None
-            elif oracle:
-                # When the intersection is empty, Oracle returns an empty string
-                expected = ''
             else:
                 expected = c.mpoly.intersection(geom)
             self.assertEqual(c.inter, expected)
@@ -241,8 +238,8 @@ class GISFunctionsTests(TestCase):
         State.objects.create(name='invalid', poly=invalid_geom)
         valid = State.objects.filter(name='valid').annotate(isvalid=functions.IsValid('poly')).first()
         invalid = State.objects.filter(name='invalid').annotate(isvalid=functions.IsValid('poly')).first()
-        self.assertEqual(valid.isvalid, True)
-        self.assertEqual(invalid.isvalid, False)
+        self.assertIs(valid.isvalid, True)
+        self.assertIs(invalid.isvalid, False)
 
     @skipUnlessDBFeature("has_Area_function")
     def test_area_with_regular_aggregate(self):
@@ -265,7 +262,7 @@ class GISFunctionsTests(TestCase):
         invalid_geom = fromstr('POLYGON((0 0, 0 1, 1 1, 1 0, 1 1, 1 0, 0 0))')
         State.objects.create(name='invalid', poly=invalid_geom)
         invalid = State.objects.filter(name='invalid').annotate(repaired=functions.MakeValid('poly')).first()
-        self.assertEqual(invalid.repaired.valid, True)
+        self.assertIs(invalid.repaired.valid, True)
         self.assertEqual(invalid.repaired, fromstr('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'))
 
     @skipUnlessDBFeature("has_MemSize_function")
@@ -295,7 +292,7 @@ class GISFunctionsTests(TestCase):
         qs = Track.objects.annotate(num_points=functions.NumPoints('line'))
         self.assertEqual(qs.first().num_points, 2)
         if spatialite or mysql:
-            # Spatialite and MySQL can only count points on LineStrings
+            # SpatiaLite and MySQL can only count points on LineStrings
             return
 
         for c in Country.objects.annotate(num_points=functions.NumPoints('mpoly')):
@@ -324,7 +321,7 @@ class GISFunctionsTests(TestCase):
 
         qs = Country.objects.annotate(point_on_surface=functions.PointOnSurface('mpoly'))
         for country in qs:
-            tol = 0.00001  # Spatialite might have WKT-translation-related precision issues
+            tol = 0.00001  # SpatiaLite might have WKT-translation-related precision issues
             self.assertTrue(ref[country.name].equals_exact(country.point_on_surface, tol))
 
     @skipUnlessDBFeature("has_Reverse_function")

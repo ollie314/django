@@ -305,8 +305,6 @@ more information.
 
 .. attribute:: Field.disabled
 
-.. versionadded:: 1.9
-
 The ``disabled`` boolean argument, when set to ``True``, disables a form field
 using the ``disabled`` HTML attribute so that it won't be editable by users.
 Even if a user tampers with the field's value submitted to the server, it will
@@ -363,7 +361,7 @@ For each field, we describe the default widget used if you don't specify
 .. class:: CharField(**kwargs)
 
     * Default widget: :class:`TextInput`
-    * Empty value: ``''`` (an empty string)
+    * Empty value: Whatever you've given as :attr:`empty_value`.
     * Normalizes to: A Unicode object.
     * Validates ``max_length`` or ``min_length``, if they are provided.
       Otherwise, all inputs are valid.
@@ -379,10 +377,14 @@ For each field, we describe the default widget used if you don't specify
 
     .. attribute:: strip
 
-       .. versionadded:: 1.9
-
        If ``True`` (default), the value will be stripped of leading and
        trailing whitespace.
+
+    .. attribute:: empty_value
+
+       .. versionadded:: 1.11
+
+       The value to use to represent "empty". Defaults to an empty string.
 
 ``ChoiceField``
 ---------------
@@ -415,11 +417,12 @@ For each field, we describe the default widget used if you don't specify
 .. class:: TypedChoiceField(**kwargs)
 
     Just like a :class:`ChoiceField`, except :class:`TypedChoiceField` takes two
-    extra arguments, ``coerce`` and ``empty_value``.
+    extra arguments, :attr:`coerce` and :attr:`empty_value`.
 
     * Default widget: :class:`Select`
-    * Empty value: Whatever you've given as ``empty_value``
-    * Normalizes to: A value of the type provided by the ``coerce`` argument.
+    * Empty value: Whatever you've given as :attr:`empty_value`.
+    * Normalizes to: A value of the type provided by the :attr:`coerce`
+      argument.
     * Validates that the given value exists in the list of choices and can be
       coerced.
     * Error message keys: ``required``, ``invalid_choice``
@@ -834,8 +837,6 @@ For each field, we describe the default widget used if you don't specify
 
     .. attribute:: strip
 
-        .. versionadded:: 1.9
-
         Defaults to ``False``. If enabled, stripping will be applied before the
         regex validation.
 
@@ -857,8 +858,6 @@ For each field, we describe the default widget used if you don't specify
    Takes an optional parameter:
 
    .. attribute:: allow_unicode
-
-       .. versionadded:: 1.9
 
        A boolean instructing the field to accept Unicode letters in addition
        to ASCII letters. Defaults to ``False``.
@@ -1006,16 +1005,25 @@ Slightly complex built-in ``Field`` classes
                     }
                     # Or define a different message for each field.
                     fields = (
-                        CharField(error_messages={'incomplete': 'Enter a country calling code.'},
-                                  validators=[RegexValidator(r'^[0-9]+$', 'Enter a valid country calling code.')]),
-                        CharField(error_messages={'incomplete': 'Enter a phone number.'},
-                                  validators=[RegexValidator(r'^[0-9]+$', 'Enter a valid phone number.')]),
-                        CharField(validators=[RegexValidator(r'^[0-9]+$', 'Enter a valid extension.')],
-                                  required=False),
+                        CharField(
+                            error_messages={'incomplete': 'Enter a country calling code.'},
+                            validators=[
+                                RegexValidator(r'^[0-9]+$', 'Enter a valid country calling code.'),
+                            ],
+                        ),
+                        CharField(
+                            error_messages={'incomplete': 'Enter a phone number.'},
+                            validators=[RegexValidator(r'^[0-9]+$', 'Enter a valid phone number.')],
+                        ),
+                        CharField(
+                            validators=[RegexValidator(r'^[0-9]+$', 'Enter a valid extension.')],
+                            required=False,
+                        ),
                     )
                     super(PhoneField, self).__init__(
                         error_messages=error_messages, fields=fields,
-                        require_all_fields=False, *args, **kwargs)
+                        require_all_fields=False, *args, **kwargs
+                    )
 
     .. attribute:: MultiValueField.widget
 
@@ -1199,13 +1207,19 @@ method::
     Allows the selection of one or more model objects, suitable for
     representing a many-to-many relation. As with :class:`ModelChoiceField`,
     you can use ``label_from_instance`` to customize the object
-    representations, and ``queryset`` is a required parameter:
+    representations.
+
+    A single argument is required:
 
     .. attribute:: queryset
 
-        A ``QuerySet`` of model objects from which the choices for the
-        field will be derived, and which will be used to validate the
-        user's selection.
+        Same as :class:`ModelChoiceField.queryset`.
+
+    Takes one optional argument:
+
+    .. attribute:: to_field_name
+
+        Same as :class:`ModelChoiceField.to_field_name`.
 
 Creating custom fields
 ======================

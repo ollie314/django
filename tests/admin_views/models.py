@@ -397,7 +397,7 @@ class Recommender(Title):
 
 
 class Recommendation(Title):
-    recommender = models.ForeignKey(Recommender, models.CASCADE)
+    the_recommender = models.ForeignKey(Recommender, models.CASCADE)
 
 
 class Collector(models.Model):
@@ -596,8 +596,12 @@ class CyclicTwo(models.Model):
         return self.name
 
 
+@python_2_unicode_compatible
 class Topping(models.Model):
     name = models.CharField(max_length=20)
+
+    def __str__(self):
+        return self.name
 
 
 class Pizza(models.Model):
@@ -621,6 +625,7 @@ class WorkHour(models.Model):
 
 class Question(models.Model):
     question = models.CharField(max_length=20)
+    posted = models.DateField(default=datetime.date.today)
 
 
 @python_2_unicode_compatible

@@ -5,6 +5,7 @@
 from __future__ import unicode_literals
 
 import copy
+import io
 import os
 import re
 import shutil
@@ -20,8 +21,10 @@ from django.core.cache import (
     DEFAULT_CACHE_ALIAS, CacheKeyWarning, cache, caches,
 )
 from django.core.cache.utils import make_template_fragment_key
-from django.db import connection, connections
-from django.http import HttpRequest, HttpResponse, StreamingHttpResponse
+from django.db import close_old_connections, connection, connections
+from django.http import (
+    HttpRequest, HttpResponse, HttpResponseNotModified, StreamingHttpResponse,
+)
 from django.middleware.cache import (
     CacheMiddleware, FetchFromCacheMiddleware, UpdateCacheMiddleware,
 )
@@ -39,6 +42,7 @@ from django.utils.cache import (
     get_cache_key, learn_cache_key, patch_cache_control,
     patch_response_headers, patch_vary_headers,
 )
+from django.utils.deprecation import RemovedInDjango21Warning
 from django.utils.encoding import force_text
 from django.views.decorators.cache import cache_page
 
@@ -212,12 +216,14 @@ class DummyCacheTests(SimpleTestCase):
 
     def test_get_or_set(self):
         self.assertEqual(cache.get_or_set('mykey', 'default'), 'default')
+        self.assertEqual(cache.get_or_set('mykey', None), None)
 
     def test_get_or_set_callable(self):
         def my_callable():
             return 'default'
 
         self.assertEqual(cache.get_or_set('mykey', my_callable), 'default')
+        self.assertEqual(cache.get_or_set('mykey', my_callable()), 'default')
 
 
 def custom_key_func(key, key_prefix, version):
@@ -236,14 +242,17 @@ _caches_setting_base = {
 }
 
 
-def caches_setting_for_tests(base=None, **params):
+def caches_setting_for_tests(base=None, exclude=None, **params):
     # `base` is used to pull in the memcached config from the original settings,
+    # `exclude` is a set of cache names denoting which `_caches_setting_base` keys
+    # should be omitted.
     # `params` are test specific overrides and `_caches_settings_base` is the
     # base config for the tests.
     # This results in the following search order:
     # params -> _caches_setting_base -> base
     base = base or {}
-    setting = {k: base.copy() for k in _caches_setting_base.keys()}
+    exclude = exclude or set()
+    setting = {k: base.copy() for k in _caches_setting_base.keys() if k not in exclude}
     for key, cache_params in setting.items():
         cache_params.update(_caches_setting_base[key])
         cache_params.update(params)
@@ -522,7 +531,7 @@ class BaseCacheTests(object):
         cache.add('key2', 'ham', None)
         self.assertEqual(cache.get('key2'), 'ham')
         added = cache.add('key1', 'new eggs', None)
-        self.assertEqual(added, False)
+        self.assertIs(added, False)
         self.assertEqual(cache.get('key1'), 'eggs')
 
         cache.set_many({'key3': 'sausage', 'key4': 'lobster bisque'}, None)
@@ -557,7 +566,7 @@ class BaseCacheTests(object):
         # Count how many keys are left in the cache.
         for i in range(1, initial_count):
             if cull_cache.has_key('cull%d' % i):
-                count = count + 1
+                count += 1
         self.assertEqual(count, final_count)
 
     def test_cull(self):
@@ -566,7 +575,7 @@ class BaseCacheTests(object):
     def test_zero_cull(self):
         self._perform_cull_test(caches['zero_cull'], 50, 19)
 
-    def test_invalid_keys(self):
+    def _perform_invalid_key_test(self, key, expected_warning):
         """
         All the builtin backends (except memcached, see below) should warn on
         keys that would be refused by memcached. This encourages portable
@@ -584,34 +593,30 @@ class BaseCacheTests(object):
         try:
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
-                # memcached does not allow whitespace or control characters in keys
-                key = 'key with spaces and 清'
                 cache.set(key, 'value')
                 self.assertEqual(len(w), 1)
                 self.assertIsInstance(w[0].message, CacheKeyWarning)
-                self.assertEqual(
-                    # warnings.warn() crashes on Python 2 if message isn't
-                    # coercible to str.
-                    str(w[0].message.args[0]),
-                    "Cache key contains characters that will cause errors if used "
-                    "with memcached: %r" % key,
-                )
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                # memcached limits key length to 250
-                key = ('a' * 250) + '清'
-                cache.set(key, 'value')
-                self.assertEqual(len(w), 1)
-                self.assertIsInstance(w[0].message, CacheKeyWarning)
-                self.assertEqual(
-                    # warnings.warn() crashes on Python 2 if message isn't
-                    # coercible to str.
-                    str(w[0].message.args[0]),
-                    'Cache key will cause errors if used with memcached: '
-                    '%r (longer than %s)' % (key, 250),
-                )
+                self.assertEqual(str(w[0].message.args[0]), expected_warning)
         finally:
             cache.key_func = old_func
+
+    def test_invalid_key_characters(self):
+        # memcached doesn't allow whitespace or control characters in keys.
+        key = 'key with spaces and 清'
+        expected_warning = (
+            "Cache key contains characters that will cause errors if used "
+            "with memcached: %r" % key
+        )
+        self._perform_invalid_key_test(key, expected_warning)
+
+    def test_invalid_key_length(self):
+        # memcached limits key length to 250.
+        key = ('a' * 250) + '清'
+        expected_warning = (
+            'Cache key will cause errors if used with memcached: '
+            '%r (longer than %s)' % (key, 250)
+        )
+        self._perform_invalid_key_test(key, expected_warning)
 
     def test_cache_versioning_get_set(self):
         # set, using default version = 1
@@ -917,18 +922,25 @@ class BaseCacheTests(object):
         self.assertIsNone(cache.get('projector'))
         self.assertEqual(cache.get_or_set('projector', 42), 42)
         self.assertEqual(cache.get('projector'), 42)
+        self.assertEqual(cache.get_or_set('null', None), None)
 
     def test_get_or_set_callable(self):
         def my_callable():
             return 'value'
 
         self.assertEqual(cache.get_or_set('mykey', my_callable), 'value')
+        self.assertEqual(cache.get_or_set('mykey', my_callable()), 'value')
 
     def test_get_or_set_version(self):
+        msg = (
+            "get_or_set() missing 1 required positional argument: 'default'"
+            if six.PY3
+            else 'get_or_set() takes at least 3 arguments'
+        )
         cache.get_or_set('brian', 1979, version=2)
-        with self.assertRaisesMessage(ValueError, 'You need to specify a value.'):
+        with self.assertRaisesMessage(TypeError, msg):
             cache.get_or_set('brian')
-        with self.assertRaisesMessage(ValueError, 'You need to specify a value.'):
+        with self.assertRaisesMessage(TypeError, msg):
             cache.get_or_set('brian', version=1)
         self.assertIsNone(cache.get('brian', version=1))
         self.assertEqual(cache.get_or_set('brian', 42, version=1), 42)
@@ -1133,23 +1145,35 @@ class LocMemCacheTests(BaseCacheTests, TestCase):
 # To check the memcached backend, the test settings file will
 # need to contain at least one cache backend setting that points at
 # your memcache server.
-memcached_params = {}
+configured_caches = {}
 for _cache_params in settings.CACHES.values():
-    if _cache_params['BACKEND'].startswith('django.core.cache.backends.memcached.'):
-        memcached_params = _cache_params
+    configured_caches[_cache_params['BACKEND']] = _cache_params
 
-memcached_never_expiring_params = memcached_params.copy()
-memcached_never_expiring_params['TIMEOUT'] = None
+MemcachedCache_params = configured_caches.get('django.core.cache.backends.memcached.MemcachedCache')
+PyLibMCCache_params = configured_caches.get('django.core.cache.backends.memcached.PyLibMCCache')
 
-memcached_far_future_params = memcached_params.copy()
-memcached_far_future_params['TIMEOUT'] = 31536000  # 60*60*24*365, 1 year
+# The memcached backends don't support cull-related options like `MAX_ENTRIES`.
+memcached_excluded_caches = {'cull', 'zero_cull'}
 
 
-@unittest.skipUnless(memcached_params, "memcached not available")
-@override_settings(CACHES=caches_setting_for_tests(base=memcached_params))
-class MemcachedCacheTests(BaseCacheTests, TestCase):
+class BaseMemcachedTests(BaseCacheTests):
 
-    def test_invalid_keys(self):
+    # By default it's assumed that the client doesn't clean up connections
+    # properly, in which case the backend must do so after each request.
+    should_disconnect_on_close = True
+
+    def test_location_multiple_servers(self):
+        locations = [
+            ['server1.tld', 'server2:11211'],
+            'server1.tld;server2:11211',
+            'server1.tld,server2:11211',
+        ]
+        for location in locations:
+            params = {'BACKEND': self.base_params['BACKEND'], 'LOCATION': location}
+            with self.settings(CACHES={'default': params}):
+                self.assertEqual(cache._servers, ['server1.tld', 'server2:11211'])
+
+    def test_invalid_key_characters(self):
         """
         On memcached, we don't introduce a duplicate key validation
         step (for speed reasons), we just let the memcached API
@@ -1159,34 +1183,33 @@ class MemcachedCacheTests(BaseCacheTests, TestCase):
         that a generic exception of some kind is raised.
         """
         # memcached does not allow whitespace or control characters in keys
+        # when using the ascii protocol.
         with self.assertRaises(Exception):
             cache.set('key with spaces', 'value')
+
+    def test_invalid_key_length(self):
         # memcached limits key length to 250
         with self.assertRaises(Exception):
             cache.set('a' * 251, 'value')
 
-    # Explicitly display a skipped test if no configured cache uses MemcachedCache
-    @unittest.skipUnless(
-        memcached_params.get('BACKEND') == 'django.core.cache.backends.memcached.MemcachedCache',
-        "cache with python-memcached library not available")
-    def test_memcached_uses_highest_pickle_version(self):
-        # Regression test for #19810
-        for cache_key, cache_config in settings.CACHES.items():
-            if cache_config['BACKEND'] == 'django.core.cache.backends.memcached.MemcachedCache':
-                self.assertEqual(caches[cache_key]._cache.pickleProtocol,
-                                 pickle.HIGHEST_PROTOCOL)
-
-    @override_settings(CACHES=caches_setting_for_tests(base=memcached_never_expiring_params))
     def test_default_never_expiring_timeout(self):
         # Regression test for #22845
-        cache.set('infinite_foo', 'bar')
-        self.assertEqual(cache.get('infinite_foo'), 'bar')
+        with self.settings(CACHES=caches_setting_for_tests(
+                base=self.base_params,
+                exclude=memcached_excluded_caches,
+                TIMEOUT=None)):
+            cache.set('infinite_foo', 'bar')
+            self.assertEqual(cache.get('infinite_foo'), 'bar')
 
-    @override_settings(CACHES=caches_setting_for_tests(base=memcached_far_future_params))
     def test_default_far_future_timeout(self):
         # Regression test for #22845
-        cache.set('future_foo', 'bar')
-        self.assertEqual(cache.get('future_foo'), 'bar')
+        with self.settings(CACHES=caches_setting_for_tests(
+                base=self.base_params,
+                exclude=memcached_excluded_caches,
+                # 60*60*24*365, 1 year
+                TIMEOUT=31536000)):
+            cache.set('future_foo', 'bar')
+            self.assertEqual(cache.get('future_foo'), 'bar')
 
     def test_cull(self):
         # culling isn't implemented, memcached deals with it.
@@ -1209,10 +1232,101 @@ class MemcachedCacheTests(BaseCacheTests, TestCase):
         self.assertEqual(cache.get('small_value'), 'a')
 
         large_value = 'a' * (max_value_length + 1)
-        cache.set('small_value', large_value)
+        try:
+            cache.set('small_value', large_value)
+        except Exception:
+            # Some clients (e.g. pylibmc) raise when the value is too large,
+            # while others (e.g. python-memcached) intentionally return True
+            # indicating success. This test is primarily checking that the key
+            # was deleted, so the return/exception behavior for the set()
+            # itself is not important.
+            pass
         # small_value should be deleted, or set if configured to accept larger values
         value = cache.get('small_value')
         self.assertTrue(value is None or value == large_value)
+
+    def test_close(self):
+        # For clients that don't manage their connections properly, the
+        # connection is closed when the request is complete.
+        signals.request_finished.disconnect(close_old_connections)
+        try:
+            with mock.patch.object(cache._lib.Client, 'disconnect_all', autospec=True) as mock_disconnect:
+                signals.request_finished.send(self.__class__)
+                self.assertIs(mock_disconnect.called, self.should_disconnect_on_close)
+        finally:
+            signals.request_finished.connect(close_old_connections)
+
+
+@unittest.skipUnless(MemcachedCache_params, "MemcachedCache backend not configured")
+@override_settings(CACHES=caches_setting_for_tests(
+    base=MemcachedCache_params,
+    exclude=memcached_excluded_caches,
+))
+class MemcachedCacheTests(BaseMemcachedTests, TestCase):
+    base_params = MemcachedCache_params
+
+    def test_memcached_uses_highest_pickle_version(self):
+        # Regression test for #19810
+        for cache_key in settings.CACHES:
+            self.assertEqual(caches[cache_key]._cache.pickleProtocol, pickle.HIGHEST_PROTOCOL)
+
+    @override_settings(CACHES=caches_setting_for_tests(
+        base=MemcachedCache_params,
+        exclude=memcached_excluded_caches,
+        OPTIONS={'server_max_value_length': 9999},
+    ))
+    def test_memcached_options(self):
+        self.assertEqual(cache._cache.server_max_value_length, 9999)
+
+
+@unittest.skipUnless(PyLibMCCache_params, "PyLibMCCache backend not configured")
+@override_settings(CACHES=caches_setting_for_tests(
+    base=PyLibMCCache_params,
+    exclude=memcached_excluded_caches,
+))
+class PyLibMCCacheTests(BaseMemcachedTests, TestCase):
+    base_params = PyLibMCCache_params
+    # libmemcached manages its own connections.
+    should_disconnect_on_close = False
+
+    # By default, pylibmc/libmemcached don't verify keys client-side and so
+    # this test triggers a server-side bug that causes later tests to fail
+    # (#19914). The `verify_keys` behavior option could be set to True (which
+    # would avoid triggering the server-side bug), however this test would
+    # still fail due to https://github.com/lericson/pylibmc/issues/219.
+    @unittest.skip("triggers a memcached-server bug, causing subsequent tests to fail")
+    def test_invalid_key_characters(self):
+        pass
+
+    @override_settings(CACHES=caches_setting_for_tests(
+        base=PyLibMCCache_params,
+        exclude=memcached_excluded_caches,
+        OPTIONS={
+            'binary': True,
+            'behaviors': {'tcp_nodelay': True},
+        },
+    ))
+    def test_pylibmc_options(self):
+        self.assertTrue(cache._cache.binary)
+        self.assertEqual(cache._cache.behaviors['tcp_nodelay'], int(True))
+
+    @override_settings(CACHES=caches_setting_for_tests(
+        base=PyLibMCCache_params,
+        exclude=memcached_excluded_caches,
+        OPTIONS={'tcp_nodelay': True},
+    ))
+    def test_pylibmc_legacy_options(self):
+        deprecation_message = (
+            "Specifying pylibmc cache behaviors as a top-level property "
+            "within `OPTIONS` is deprecated. Move `tcp_nodelay` into a dict named "
+            "`behaviors` inside `OPTIONS` instead."
+        )
+        with warnings.catch_warnings(record=True) as warns:
+            warnings.simplefilter("always")
+            self.assertEqual(cache._cache.behaviors['tcp_nodelay'], int(True))
+        self.assertEqual(len(warns), 1)
+        self.assertIsInstance(warns[0].message, RemovedInDjango21Warning)
+        self.assertEqual(str(warns[0].message), deprecation_message)
 
 
 @override_settings(CACHES=caches_setting_for_tests(
@@ -1260,6 +1374,17 @@ class FileBasedCacheTests(BaseCacheTests, TestCase):
     def test_cache_write_unpicklable_type(self):
         # This fails if not using the highest pickling protocol on Python 2.
         cache.set('unpicklable', UnpicklableType())
+
+    def test_get_ignores_enoent(self):
+        cache.set('foo', 'bar')
+        os.unlink(cache._key_to_file('foo'))
+        # Returns the default instead of erroring.
+        self.assertEqual(cache.get('foo', 'baz'), 'baz')
+
+    def test_get_does_not_ignore_non_enoent_errno_values(self):
+        with mock.patch.object(io, 'open', side_effect=IOError):
+            with self.assertRaises(IOError):
+                cache.get('foo')
 
 
 @override_settings(CACHES={
@@ -1381,6 +1506,7 @@ class DefaultNonExpiringCacheKeyTests(SimpleTestCase):
         },
     },
     USE_I18N=False,
+    ALLOWED_HOSTS=['.example.com'],
 )
 class CacheUtils(SimpleTestCase):
     """TestCase for django.utils.cache functions."""
@@ -2027,6 +2153,19 @@ class CacheMiddlewareTest(SimpleTestCase):
         # Inserting a CSRF cookie in a cookie-less request prevented caching.
         self.assertIsNone(cache_middleware.process_request(request))
 
+    def test_304_response_has_http_caching_headers_but_not_cached(self):
+        original_view = mock.Mock(return_value=HttpResponseNotModified())
+        view = cache_page(2)(original_view)
+        request = self.factory.get('/view/')
+        # The view shouldn't be cached on the second call.
+        view(request).close()
+        response = view(request)
+        response.close()
+        self.assertEqual(original_view.call_count, 2)
+        self.assertIsInstance(response, HttpResponseNotModified)
+        self.assertIn('Cache-Control', response)
+        self.assertIn('Expires', response)
+
 
 @override_settings(
     CACHE_MIDDLEWARE_KEY_PREFIX='settingsprefix',
@@ -2043,7 +2182,7 @@ class TestWithTemplateResponse(SimpleTestCase):
     Tests various headers w/ TemplateResponse.
 
     Most are probably redundant since they manipulate the same object
-    anyway but the Etag header is 'special' because it relies on the
+    anyway but the ETag header is 'special' because it relies on the
     content being complete (which is not necessarily always the case
     with a TemplateResponse)
     """

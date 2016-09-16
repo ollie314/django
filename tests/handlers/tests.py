@@ -4,6 +4,7 @@ from __future__ import unicode_literals
 
 import unittest
 
+from django.core.exceptions import ImproperlyConfigured
 from django.core.handlers.wsgi import WSGIHandler, WSGIRequest, get_script_name
 from django.core.signals import request_finished, request_started
 from django.db import close_old_connections, connection
@@ -32,12 +33,16 @@ class HandlerTests(SimpleTestCase):
         self.assertIsNotNone(handler._request_middleware)
 
     def test_bad_path_info(self):
-        """Tests for bug #15672 ('request' referenced before assignment)"""
+        """
+        A non-UTF-8 path populates PATH_INFO with an URL-encoded path and
+        produces a 404.
+        """
         environ = RequestFactory().get('/').environ
         environ['PATH_INFO'] = b'\xed' if six.PY2 else '\xed'
         handler = WSGIHandler()
         response = handler(environ, lambda *a, **k: None)
-        self.assertEqual(response.status_code, 400)
+        # The path of the request will be encoded to '/%ED'.
+        self.assertEqual(response.status_code, 404)
 
     def test_non_ascii_query_string(self):
         """
@@ -166,6 +171,10 @@ class SignalsTests(SimpleTestCase):
         self.assertEqual(self.signals, ['started', 'finished'])
 
 
+def empty_middleware(get_response):
+    pass
+
+
 @override_settings(ROOT_URLCONF='handlers.urls')
 class HandlerRequestTests(SimpleTestCase):
 
@@ -198,6 +207,12 @@ class HandlerRequestTests(SimpleTestCase):
         environ = RequestFactory().get('/httpstatus_enum/').environ
         WSGIHandler()(environ, start_response)
         self.assertEqual(start_response.status, '200 OK')
+
+    @override_settings(MIDDLEWARE=['handlers.tests.empty_middleware'])
+    def test_middleware_returns_none(self):
+        msg = 'Middleware factory handlers.tests.empty_middleware returned None.'
+        with self.assertRaisesMessage(ImproperlyConfigured, msg):
+            self.client.get('/')
 
 
 class ScriptNameTests(SimpleTestCase):

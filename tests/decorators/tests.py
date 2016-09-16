@@ -13,6 +13,7 @@ from django.utils.decorators import method_decorator
 from django.utils.deprecation import RemovedInDjango20Warning
 from django.utils.encoding import force_text
 from django.utils.functional import allow_lazy, keep_lazy, keep_lazy_text, lazy
+from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy
 from django.views.decorators.cache import (
     cache_control, cache_page, never_cache,
@@ -74,6 +75,9 @@ full_decorator = compose(
     keep_lazy(HttpResponse),
     keep_lazy_text,
     lazy,
+
+    # django.utils.safestring
+    mark_safe,
 )
 
 fully_decorated = full_decorator(fully_decorated)
@@ -223,8 +227,8 @@ class MethodDecoratorTests(SimpleTestCase):
         def func():
             pass
 
-        self.assertEqual(getattr(func, 'myattr', False), True)
-        self.assertEqual(getattr(func, 'myattr2', False), True)
+        self.assertIs(getattr(func, 'myattr', False), True)
+        self.assertIs(getattr(func, 'myattr2', False), True)
 
         # Decorate using method_decorator() on the method.
         class TestPlain(object):
@@ -254,11 +258,11 @@ class MethodDecoratorTests(SimpleTestCase):
                 pass
 
         for Test in (TestPlain, TestMethodAndClass, TestIterable):
-            self.assertEqual(getattr(Test().method, 'myattr', False), True)
-            self.assertEqual(getattr(Test().method, 'myattr2', False), True)
+            self.assertIs(getattr(Test().method, 'myattr', False), True)
+            self.assertIs(getattr(Test().method, 'myattr2', False), True)
 
-            self.assertEqual(getattr(Test.method, 'myattr', False), True)
-            self.assertEqual(getattr(Test.method, 'myattr2', False), True)
+            self.assertIs(getattr(Test.method, 'myattr', False), True)
+            self.assertIs(getattr(Test.method, 'myattr2', False), True)
 
             self.assertEqual(Test.method.__doc__, 'A method')
             self.assertEqual(Test.method.__name__, 'method')
@@ -280,7 +284,7 @@ class MethodDecoratorTests(SimpleTestCase):
             def method(self):
                 return True
 
-        self.assertEqual(Test().method(), False)
+        self.assertIs(Test().method(), False)
 
     def test_descriptors(self):
 
@@ -438,13 +442,13 @@ class XFrameOptionsDecoratorsTests(TestCase):
             return HttpResponse()
         req = HttpRequest()
         resp = a_view(req)
-        self.assertEqual(resp.get('X-Frame-Options', None), None)
+        self.assertIsNone(resp.get('X-Frame-Options', None))
         self.assertTrue(resp.xframe_options_exempt)
 
         # Since the real purpose of the exempt decorator is to suppress
         # the middleware's functionality, let's make sure it actually works...
         r = XFrameOptionsMiddleware().process_response(req, resp)
-        self.assertEqual(r.get('X-Frame-Options', None), None)
+        self.assertIsNone(r.get('X-Frame-Options', None))
 
 
 class NeverCacheDecoratorTest(TestCase):

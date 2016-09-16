@@ -1,5 +1,6 @@
 from __future__ import unicode_literals
 
+import inspect
 import warnings
 from functools import partial
 
@@ -9,6 +10,7 @@ from django.core import checks, exceptions
 from django.db import connection, router
 from django.db.backends import utils
 from django.db.models import Q
+from django.db.models.constants import LOOKUP_SEP
 from django.db.models.deletion import CASCADE, SET_DEFAULT, SET_NULL
 from django.db.models.query_utils import PathInfo
 from django.db.models.utils import make_model_tuple
@@ -16,13 +18,15 @@ from django.utils import six
 from django.utils.deprecation import RemovedInDjango20Warning
 from django.utils.encoding import force_text
 from django.utils.functional import cached_property, curry
+from django.utils.lru_cache import lru_cache
 from django.utils.translation import ugettext_lazy as _
 from django.utils.version import get_docs_version
 
 from . import Field
 from .related_descriptors import (
-    ForwardManyToOneDescriptor, ManyToManyDescriptor,
-    ReverseManyToOneDescriptor, ReverseOneToOneDescriptor,
+    ForwardManyToOneDescriptor, ForwardOneToOneDescriptor,
+    ManyToManyDescriptor, ReverseManyToOneDescriptor,
+    ReverseOneToOneDescriptor,
 )
 from .related_lookups import (
     RelatedExact, RelatedGreaterThan, RelatedGreaterThanOrEqual, RelatedIn,
@@ -114,6 +118,7 @@ class RelatedField(Field):
     def check(self, **kwargs):
         errors = super(RelatedField, self).check(**kwargs)
         errors.extend(self._check_related_name_is_valid())
+        errors.extend(self._check_related_query_name_is_valid())
         errors.extend(self._check_relation_model_exists())
         errors.extend(self._check_referencing_to_swapped_model())
         errors.extend(self._check_clashes())
@@ -146,6 +151,35 @@ class RelatedField(Field):
                 )
             ]
         return []
+
+    def _check_related_query_name_is_valid(self):
+        if self.remote_field.is_hidden():
+            return []
+        rel_query_name = self.related_query_name()
+        errors = []
+        if rel_query_name.endswith('_'):
+            errors.append(
+                checks.Error(
+                    "Reverse query name '%s' must not end with an underscore."
+                    % (rel_query_name,),
+                    hint=("Add or change a related_name or related_query_name "
+                          "argument for this field."),
+                    obj=self,
+                    id='fields.E308',
+                )
+            )
+        if LOOKUP_SEP in rel_query_name:
+            errors.append(
+                checks.Error(
+                    "Reverse query name '%s' must not contain '%s'."
+                    % (rel_query_name, LOOKUP_SEP),
+                    hint=("Add or change a related_name or related_query_name "
+                          "argument for this field."),
+                    obj=self,
+                    id='fields.E309',
+                )
+            )
+        return errors
 
     def _check_relation_model_exists(self):
         rel_is_missing = self.remote_field.model not in self.opts.apps.get_models()
@@ -437,6 +471,7 @@ class ForeignObject(RelatedField):
 
     requires_unique_target = True
     related_accessor_class = ReverseManyToOneDescriptor
+    forward_related_accessor_class = ForwardManyToOneDescriptor
     rel_class = ForeignObjectRel
 
     def __init__(self, to, on_delete, from_fields, to_fields, rel=None, related_name=None,
@@ -461,7 +496,30 @@ class ForeignObject(RelatedField):
 
     def check(self, **kwargs):
         errors = super(ForeignObject, self).check(**kwargs)
+        errors.extend(self._check_to_fields_exist())
         errors.extend(self._check_unique_target())
+        return errors
+
+    def _check_to_fields_exist(self):
+        # Skip nonexistent models.
+        if isinstance(self.remote_field.model, six.string_types):
+            return []
+
+        errors = []
+        for to_field in self.to_fields:
+            if to_field:
+                try:
+                    self.remote_field.model._meta.get_field(to_field)
+                except exceptions.FieldDoesNotExist:
+                    errors.append(
+                        checks.Error(
+                            "The to_field '%s' doesn't exist on the related "
+                            "model '%s'."
+                            % (to_field, self.remote_field.model._meta.label),
+                            obj=self,
+                            id='fields.E312',
+                        )
+                    )
         return errors
 
     def _check_unique_target(self):
@@ -675,30 +733,17 @@ class ForeignObject(RelatedField):
         pathinfos = [PathInfo(from_opts, opts, (opts.pk,), self.remote_field, not self.unique, False)]
         return pathinfos
 
-    def get_lookup(self, lookup_name):
-        if lookup_name == 'in':
-            return RelatedIn
-        elif lookup_name == 'exact':
-            return RelatedExact
-        elif lookup_name == 'gt':
-            return RelatedGreaterThan
-        elif lookup_name == 'gte':
-            return RelatedGreaterThanOrEqual
-        elif lookup_name == 'lt':
-            return RelatedLessThan
-        elif lookup_name == 'lte':
-            return RelatedLessThanOrEqual
-        elif lookup_name == 'isnull':
-            return RelatedIsNull
-        else:
-            raise TypeError('Related Field got invalid lookup: %s' % lookup_name)
-
-    def get_transform(self, *args, **kwargs):
-        raise NotImplementedError('Relational fields do not support transforms.')
+    @classmethod
+    @lru_cache(maxsize=None)
+    def get_lookups(cls):
+        bases = inspect.getmro(cls)
+        bases = bases[:bases.index(ForeignObject) + 1]
+        class_lookups = [parent.__dict__.get('class_lookups', {}) for parent in bases]
+        return cls.merge_dicts(class_lookups)
 
     def contribute_to_class(self, cls, name, private_only=False, **kwargs):
         super(ForeignObject, self).contribute_to_class(cls, name, private_only=private_only, **kwargs)
-        setattr(cls, self.name, ForwardManyToOneDescriptor(self))
+        setattr(cls, self.name, self.forward_related_accessor_class(self))
 
     def contribute_to_related_class(self, cls, related):
         # Internal FK's - i.e., those with a related name ending with '+' -
@@ -710,6 +755,14 @@ class ForeignObject(RelatedField):
             # model load time.
             if self.remote_field.limit_choices_to:
                 cls._meta.related_fkey_lookups.append(self.remote_field.limit_choices_to)
+
+ForeignObject.register_lookup(RelatedIn)
+ForeignObject.register_lookup(RelatedExact)
+ForeignObject.register_lookup(RelatedLessThan)
+ForeignObject.register_lookup(RelatedGreaterThan)
+ForeignObject.register_lookup(RelatedGreaterThanOrEqual)
+ForeignObject.register_lookup(RelatedLessThanOrEqual)
+ForeignObject.register_lookup(RelatedIsNull)
 
 
 class ForeignKey(ForeignObject):
@@ -870,7 +923,7 @@ class ForeignKey(ForeignObject):
         if value is None:
             return
 
-        using = router.db_for_read(model_instance.__class__, instance=model_instance)
+        using = router.db_for_read(self.remote_field.model, instance=model_instance)
         qs = self.remote_field.model._default_manager.using(using).filter(
             **{self.remote_field.field_name: value}
         )
@@ -969,6 +1022,7 @@ class OneToOneField(ForeignKey):
     one_to_one = True
 
     related_accessor_class = ReverseOneToOneDescriptor
+    forward_related_accessor_class = ForwardOneToOneDescriptor
     rel_class = OneToOneRel
 
     description = _("One-to-one relationship")
@@ -1137,6 +1191,7 @@ class ManyToManyField(RelatedField):
         errors.extend(self._check_unique(**kwargs))
         errors.extend(self._check_relationship_model(**kwargs))
         errors.extend(self._check_ignored_options(**kwargs))
+        errors.extend(self._check_table_uniqueness(**kwargs))
         return errors
 
     def _check_unique(self, **kwargs):
@@ -1168,6 +1223,16 @@ class ManyToManyField(RelatedField):
                     'ManyToManyField does not support validators.',
                     obj=self,
                     id='fields.W341',
+                )
+            )
+        if (self.remote_field.limit_choices_to and self.remote_field.through and
+                not self.remote_field.through._meta.auto_created):
+            warnings.append(
+                checks.Warning(
+                    'limit_choices_to has no effect on ManyToManyField '
+                    'with a through model.',
+                    obj=self,
+                    id='fields.W343',
                 )
             )
 
@@ -1372,6 +1437,36 @@ class ManyToManyField(RelatedField):
 
         return errors
 
+    def _check_table_uniqueness(self, **kwargs):
+        if isinstance(self.remote_field.through, six.string_types) or not self.remote_field.through._meta.managed:
+            return []
+        registered_tables = {
+            model._meta.db_table: model
+            for model in self.opts.apps.get_models(include_auto_created=True)
+            if model != self.remote_field.through and model._meta.managed
+        }
+        m2m_db_table = self.m2m_db_table()
+        if m2m_db_table in registered_tables:
+            model = registered_tables[m2m_db_table]
+            if model._meta.auto_created:
+                def _get_field_name(model):
+                    for field in model._meta.auto_created._meta.many_to_many:
+                        if field.remote_field.through is model:
+                            return field.name
+                opts = model._meta.auto_created._meta
+                clashing_obj = '%s.%s' % (opts.label, _get_field_name(model))
+            else:
+                clashing_obj = '%s' % model._meta.label
+            return [
+                checks.Error(
+                    "The field's intermediary table '%s' clashes with the "
+                    "table name of '%s'." % (m2m_db_table, clashing_obj),
+                    obj=self,
+                    id='fields.E340',
+                )
+            ]
+        return []
+
     def deconstruct(self):
         name, path, args, kwargs = super(ManyToManyField, self).deconstruct()
         # Handle the simpler arguments.
@@ -1565,10 +1660,9 @@ class ManyToManyField(RelatedField):
         """
         Return the value of this field in the given model instance.
         """
-        qs = getattr(obj, self.attname).all()
-        if qs._result_cache is not None:
-            return [item.pk for item in qs]
-        return list(qs.values_list('pk', flat=True))
+        if obj.pk is None:
+            return self.related_model.objects.none()
+        return getattr(obj, self.attname).all()
 
     def save_form_data(self, instance, data):
         getattr(instance, self.attname).set(data)

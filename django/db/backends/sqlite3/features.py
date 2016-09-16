@@ -39,10 +39,15 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     supports_sequence_reset = False
     can_clone_databases = True
     supports_temporal_subtraction = True
+    ignores_quoted_identifier_case = True
 
     @cached_property
     def uses_savepoints(self):
         return Database.sqlite_version_info >= (3, 6, 8)
+
+    @cached_property
+    def supports_index_column_ordering(self):
+        return Database.sqlite_version_info >= (3, 3, 0)
 
     @cached_property
     def can_release_savepoints(self):

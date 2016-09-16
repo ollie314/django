@@ -6,9 +6,10 @@ from django.http import HttpResponseRedirect
 from django.urls import get_script_prefix, is_valid_path
 from django.utils import translation
 from django.utils.cache import patch_vary_headers
+from django.utils.deprecation import MiddlewareMixin
 
 
-class LocaleMiddleware(object):
+class LocaleMiddleware(MiddlewareMixin):
     """
     This is a very simple middleware that parses a request
     and decides what translation object to install in the current

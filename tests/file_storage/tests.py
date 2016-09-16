@@ -24,6 +24,7 @@ from django.test import (
     override_settings,
 )
 from django.test.utils import requires_tz_support
+from django.urls import NoReverseMatch, reverse_lazy
 from django.utils import six, timezone
 from django.utils._os import upath
 from django.utils.deprecation import RemovedInDjango20Warning
@@ -73,7 +74,7 @@ class GetStorageClassTests(SimpleTestCase):
             get_storage_class('django.core.files.non_existing_storage.NonExistingStorage')
 
 
-class FileStorageDeconstructionTests(unittest.TestCase):
+class FileSystemStorageTests(unittest.TestCase):
 
     def test_deconstruction(self):
         path, args, kwargs = temp_storage.deconstruct()
@@ -89,14 +90,20 @@ class FileStorageDeconstructionTests(unittest.TestCase):
         path, args, kwargs = storage.deconstruct()
         self.assertEqual(kwargs, kwargs_orig)
 
+    def test_lazy_base_url_init(self):
+        """
+        FileSystemStorage.__init__() shouldn't evaluate base_url.
+        """
+        storage = FileSystemStorage(base_url=reverse_lazy('app:url'))
+        with self.assertRaises(NoReverseMatch):
+            storage.url(storage.base_url)
+
 
 # Tests for TZ-aware time methods need pytz.
 requires_pytz = unittest.skipIf(pytz is None, "this test requires pytz")
 
 
-class FileStorageTests(TestCase):
-    # Changing TIME_ZONE may issue a query to set the database's timezone,
-    # hence TestCase.
+class FileStorageTests(SimpleTestCase):
     storage_class = FileSystemStorage
 
     def setUp(self):
@@ -743,6 +750,14 @@ class FileFieldStorageTests(TestCase):
             normal.write(b'updated')
         obj.refresh_from_db()
         self.assertEqual(obj.normal.read(), b'updated')
+        obj.normal.close()
+
+    def test_filefield_reopen(self):
+        obj = Storage.objects.create(normal=SimpleUploadedFile('reopen.txt', b'content'))
+        with obj.normal as normal:
+            normal.open()
+        obj.normal.open()
+        obj.normal.file.seek(0)
         obj.normal.close()
 
     def test_duplicate_filename(self):

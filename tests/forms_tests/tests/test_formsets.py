@@ -377,6 +377,17 @@ class FormsFormsetTestCase(SimpleTestCase):
         self.assertFalse(formset.is_valid())
         self.assertEqual(formset.non_form_errors(), ['Please submit 3 or more forms.'])
 
+    def test_formset_validate_min_excludes_empty_forms(self):
+        data = {
+            'choices-TOTAL_FORMS': '2',
+            'choices-INITIAL_FORMS': '0',
+        }
+        ChoiceFormSet = formset_factory(Choice, extra=2, min_num=1, validate_min=True, can_delete=True)
+        formset = ChoiceFormSet(data, prefix='choices')
+        self.assertFalse(formset.has_changed())
+        self.assertFalse(formset.is_valid())
+        self.assertEqual(formset.non_form_errors(), ['Please submit 1 or more forms.'])
+
     def test_second_form_partially_filled_2(self):
         # And once again, if we try to partially complete a form, validation will fail.
 
@@ -1012,11 +1023,8 @@ class FormsFormsetTestCase(SimpleTestCase):
 
         # confirm indexing of formset
         self.assertEqual(formset[0], forms[0])
-        try:
+        with self.assertRaises(IndexError):
             formset[3]
-            self.fail('Requesting an invalid formset index should raise an exception')
-        except IndexError:
-            pass
 
         # Formsets can override the default iteration order
         class BaseReverseFormSet(BaseFormSet):
@@ -1319,10 +1327,10 @@ class TestIsBoundBehavior(SimpleTestCase):
         unbound_formset = ArticleFormSet()
         bound_formset = ArticleFormSet(data)
 
-        empty_forms = []
-
-        empty_forms.append(unbound_formset.empty_form)
-        empty_forms.append(bound_formset.empty_form)
+        empty_forms = [
+            unbound_formset.empty_form,
+            bound_formset.empty_form
+        ]
 
         # Empty forms should be unbound
         self.assertFalse(empty_forms[0].is_bound)

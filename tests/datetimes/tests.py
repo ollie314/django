@@ -49,44 +49,39 @@ class DateTimesTests(TestCase):
         c = Category.objects.create(name="serious-news")
         c.articles.add(a1, a3)
 
-        self.assertQuerysetEqual(
+        self.assertSequenceEqual(
             Comment.objects.datetimes("article__pub_date", "year"), [
                 datetime.datetime(2005, 1, 1),
                 datetime.datetime(2010, 1, 1),
             ],
-            lambda d: d,
         )
-        self.assertQuerysetEqual(
+        self.assertSequenceEqual(
             Comment.objects.datetimes("article__pub_date", "month"), [
                 datetime.datetime(2005, 7, 1),
                 datetime.datetime(2010, 7, 1),
             ],
-            lambda d: d
         )
-        self.assertQuerysetEqual(
+        self.assertSequenceEqual(
             Comment.objects.datetimes("article__pub_date", "day"), [
                 datetime.datetime(2005, 7, 28),
                 datetime.datetime(2010, 7, 28),
             ],
-            lambda d: d
         )
-        self.assertQuerysetEqual(
+        self.assertSequenceEqual(
             Article.objects.datetimes("comments__pub_date", "day"), [
                 datetime.datetime(2005, 7, 28),
                 datetime.datetime(2005, 7, 29),
                 datetime.datetime(2005, 8, 29),
                 datetime.datetime(2010, 7, 28),
             ],
-            lambda d: d
         )
         self.assertQuerysetEqual(
             Article.objects.datetimes("comments__approval_date", "day"), []
         )
-        self.assertQuerysetEqual(
+        self.assertSequenceEqual(
             Category.objects.datetimes("articles__pub_date", "day"), [
                 datetime.datetime(2005, 7, 28),
             ],
-            lambda d: d,
         )
 
     @skipIf(pytz is None, "this test requires pytz")
@@ -153,3 +148,9 @@ class DateTimesTests(TestCase):
             datetime.datetime(2005, 7, 30, 0, 0),
             datetime.datetime(2005, 7, 29, 0, 0),
             datetime.datetime(2005, 7, 28, 0, 0)])
+
+    def test_datetimes_disallows_date_fields(self):
+        dt = datetime.datetime(2005, 7, 28, 12, 15)
+        Article.objects.create(pub_date=dt, published_on=dt.date(), title="Don't put dates into datetime functions!")
+        with self.assertRaisesMessage(ValueError, "Cannot truncate DateField 'published_on' to DateTimeField"):
+            list(Article.objects.datetimes('published_on', 'second'))

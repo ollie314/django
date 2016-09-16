@@ -169,6 +169,14 @@ class DebugViewTests(LoggingCaptureMixin, SimpleTestCase):
             }]):
                 response = self.client.get(reverse('raises_template_does_not_exist', kwargs={"path": template_name}))
             self.assertContains(response, "%s (Source does not exist)" % template_path, status_code=500, count=2)
+            # Assert as HTML.
+            self.assertContains(
+                response,
+                '<li><code>django.template.loaders.filesystem.Loader</code>: '
+                '%s (Source does not exist)</li>' % os.path.join(tempdir, 'notfound.html'),
+                status_code=500,
+                html=True,
+            )
 
     def test_no_template_source_loaders(self):
         """
@@ -442,15 +450,9 @@ class ExceptionReporterTests(SimpleTestCase):
         except BrokenEvaluation:
             exc_type, exc_value, tb = sys.exc_info()
 
-        reporter = ExceptionReporter(request, exc_type, exc_value, tb)
-        try:
-            html = reporter.get_traceback_html()
-        except BrokenEvaluation:
-            self.fail("Broken evaluation in traceback is not caught.")
-
         self.assertIn(
             "BrokenEvaluation",
-            html,
+            ExceptionReporter(request, exc_type, exc_value, tb).get_traceback_html(),
             "Evaluation exception reason not mentioned in traceback"
         )
 
@@ -461,6 +463,43 @@ class ExceptionReporterTests(SimpleTestCase):
         reporter = ExceptionReporter(request, None, None, None)
         html = reporter.get_traceback_html()
         self.assertIn("http://evil.com/", html)
+
+    def test_request_with_items_key(self):
+        """
+        An exception report can be generated for requests with 'items' in
+        request GET, POST, FILES, or COOKIES QueryDicts.
+        """
+        if six.PY3:
+            value = '<td>items</td><td class="code"><pre>&#39;Oops&#39;</pre></td>'
+        else:
+            value = '<td>items</td><td class="code"><pre>u&#39;Oops&#39;</pre></td>'
+        # GET
+        request = self.rf.get('/test_view/?items=Oops')
+        reporter = ExceptionReporter(request, None, None, None)
+        html = reporter.get_traceback_html()
+        self.assertInHTML(value, html)
+        # POST
+        request = self.rf.post('/test_view/', data={'items': 'Oops'})
+        reporter = ExceptionReporter(request, None, None, None)
+        html = reporter.get_traceback_html()
+        self.assertInHTML(value, html)
+        # FILES
+        fp = six.StringIO('filecontent')
+        request = self.rf.post('/test_view/', data={'name': 'filename', 'items': fp})
+        reporter = ExceptionReporter(request, None, None, None)
+        html = reporter.get_traceback_html()
+        self.assertInHTML(
+            '<td>items</td><td class="code"><pre>&lt;InMemoryUploadedFile: '
+            'items (application/octet-stream)&gt;</pre></td>',
+            html
+        )
+        # COOKES
+        rf = RequestFactory()
+        rf.cookies['items'] = 'Oops'
+        request = rf.get('/test_view/')
+        reporter = ExceptionReporter(request, None, None, None)
+        html = reporter.get_traceback_html()
+        self.assertInHTML('<td>items</td><td class="code"><pre>&#39;Oops&#39;</pre></td>', html)
 
 
 class PlainTextReportTests(SimpleTestCase):
@@ -516,6 +555,39 @@ class PlainTextReportTests(SimpleTestCase):
         request = self.rf.get('/test_view/')
         reporter = ExceptionReporter(request, None, "I'm a little teapot", None)
         reporter.get_traceback_text()
+
+    def test_request_with_items_key(self):
+        """
+        An exception report can be generated for requests with 'items' in
+        request GET, POST, FILES, or COOKIES QueryDicts.
+        """
+        if six.PY3:
+            value = "items = 'Oops'"
+        else:
+            value = "items = u'Oops'"
+        # GET
+        request = self.rf.get('/test_view/?items=Oops')
+        reporter = ExceptionReporter(request, None, None, None)
+        text = reporter.get_traceback_text()
+        self.assertIn(value, text)
+        # POST
+        request = self.rf.post('/test_view/', data={'items': 'Oops'})
+        reporter = ExceptionReporter(request, None, None, None)
+        text = reporter.get_traceback_text()
+        self.assertIn(value, text)
+        # FILES
+        fp = six.StringIO('filecontent')
+        request = self.rf.post('/test_view/', data={'name': 'filename', 'items': fp})
+        reporter = ExceptionReporter(request, None, None, None)
+        text = reporter.get_traceback_text()
+        self.assertIn('items = <InMemoryUploadedFile:', text)
+        # COOKES
+        rf = RequestFactory()
+        rf.cookies['items'] = 'Oops'
+        request = rf.get('/test_view/')
+        reporter = ExceptionReporter(request, None, None, None)
+        text = reporter.get_traceback_text()
+        self.assertIn("items = 'Oops'", text)
 
     def test_message_only(self):
         reporter = ExceptionReporter(None, None, "I'm a little teapot", None)

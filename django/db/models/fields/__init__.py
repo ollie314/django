@@ -20,6 +20,7 @@ from django.core import checks, exceptions, validators
 # purposes.
 from django.core.exceptions import FieldDoesNotExist  # NOQA
 from django.db import connection, connections, router
+from django.db.models.constants import LOOKUP_SEP
 from django.db.models.query_utils import DeferredAttribute, RegisterLookupMixin
 from django.utils import six, timezone
 from django.utils.datastructures import DictWrapper
@@ -221,10 +222,10 @@ class Field(RegisterLookupMixin):
                     id='fields.E001',
                 )
             ]
-        elif '__' in self.name:
+        elif LOOKUP_SEP in self.name:
             return [
                 checks.Error(
-                    'Field names must not contain "__".',
+                    'Field names must not contain "%s".' % (LOOKUP_SEP,),
                     obj=self,
                     id='fields.E002',
                 )
@@ -816,7 +817,7 @@ class Field(RegisterLookupMixin):
         Returns a string value of this field from the passed obj.
         This is used by the serialization framework.
         """
-        return smart_text(self.value_from_object(obj))
+        return force_text(self.value_from_object(obj))
 
     def _get_flatchoices(self):
         """Flattened version of choices tuple."""
@@ -1074,7 +1075,7 @@ class CharField(Field):
     def to_python(self, value):
         if isinstance(value, six.string_types) or value is None:
             return value
-        return smart_text(value)
+        return force_text(value)
 
     def get_prep_value(self, value):
         value = super(CharField, self).get_prep_value(value)
@@ -1085,6 +1086,9 @@ class CharField(Field):
         # will be validated twice. This is considered acceptable since we want
         # the value in the form field (to pass into widget for example).
         defaults = {'max_length': self.max_length}
+        # TODO: Handle multiple backends with different feature flags.
+        if self.null and not connection.features.interprets_empty_strings_as_nulls:
+            defaults['empty_value'] = None
         defaults.update(kwargs)
         return super(CharField, self).formfield(**defaults)
 
@@ -1808,14 +1812,22 @@ class IntegerField(Field):
     def validators(self):
         # These validators can't be added at field initialization time since
         # they're based on values retrieved from `connection`.
-        range_validators = []
+        validators_ = super(IntegerField, self).validators
         internal_type = self.get_internal_type()
         min_value, max_value = connection.ops.integer_field_range(internal_type)
         if min_value is not None:
-            range_validators.append(validators.MinValueValidator(min_value))
+            for validator in validators_:
+                if isinstance(validator, validators.MinValueValidator) and validator.limit_value >= min_value:
+                    break
+            else:
+                validators_.append(validators.MinValueValidator(min_value))
         if max_value is not None:
-            range_validators.append(validators.MaxValueValidator(max_value))
-        return super(IntegerField, self).validators + range_validators
+            for validator in validators_:
+                if isinstance(validator, validators.MaxValueValidator) and validator.limit_value <= max_value:
+                    break
+            else:
+                validators_.append(validators.MaxValueValidator(max_value))
+        return validators_
 
     def get_prep_value(self, value):
         value = super(IntegerField, self).get_prep_value(value)
@@ -2117,7 +2129,7 @@ class TextField(Field):
     def to_python(self, value):
         if isinstance(value, six.string_types) or value is None:
             return value
-        return smart_text(value)
+        return force_text(value)
 
     def get_prep_value(self, value):
         value = super(TextField, self).get_prep_value(value)

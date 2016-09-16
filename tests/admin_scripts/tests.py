@@ -28,7 +28,6 @@ from django.db.migrations.recorder import MigrationRecorder
 from django.test import (
     LiveServerTestCase, SimpleTestCase, TestCase, mock, override_settings,
 )
-from django.test.runner import DiscoverRunner
 from django.utils._os import npath, upath
 from django.utils.encoding import force_text
 from django.utils.six import PY2, PY3, StringIO
@@ -614,7 +613,7 @@ class DjangoAdminSettingsDirectory(AdminScriptTestCase):
         self.addCleanup(shutil.rmtree, app_path)
         self.assertNoOutput(err)
         self.assertTrue(os.path.exists(app_path))
-        unicode_literals_import = "from __future__ import unicode_literals\n"
+        unicode_literals_import = "# -*- coding: utf-8 -*-\nfrom __future__ import unicode_literals\n\n"
         with open(os.path.join(app_path, 'apps.py'), 'r') as f:
             content = f.read()
             self.assertIn("class SettingsTestConfig(AppConfig)", content)
@@ -623,6 +622,15 @@ class DjangoAdminSettingsDirectory(AdminScriptTestCase):
                 self.assertIn(unicode_literals_import, content)
         if not PY3:
             with open(os.path.join(app_path, 'models.py'), 'r') as fp:
+                content = fp.read()
+            self.assertIn(unicode_literals_import, content)
+            with open(os.path.join(app_path, 'views.py'), 'r') as fp:
+                content = fp.read()
+            self.assertIn(unicode_literals_import, content)
+            with open(os.path.join(app_path, 'admin.py'), 'r') as fp:
+                content = fp.read()
+            self.assertIn(unicode_literals_import, content)
+            with open(os.path.join(app_path, 'tests.py'), 'r') as fp:
                 content = fp.read()
             self.assertIn(unicode_literals_import, content)
 
@@ -1274,46 +1282,6 @@ class ManageCheck(AdminScriptTestCase):
         )
         self.assertEqual(err, expected_err)
         self.assertNoOutput(out)
-
-
-class CustomTestRunner(DiscoverRunner):
-
-    def __init__(self, *args, **kwargs):
-        assert 'liveserver' not in kwargs
-        super(CustomTestRunner, self).__init__(*args, **kwargs)
-
-    def run_tests(self, test_labels, extra_tests=None, **kwargs):
-        pass
-
-
-class ManageTestCommand(AdminScriptTestCase):
-    def test_liveserver(self):
-        """
-        Ensure that the --liveserver option sets the environment variable
-        correctly.
-        Refs #2879.
-        """
-
-        # Backup original state
-        address_predefined = 'DJANGO_LIVE_TEST_SERVER_ADDRESS' in os.environ
-        old_address = os.environ.get('DJANGO_LIVE_TEST_SERVER_ADDRESS')
-
-        call_command('test', verbosity=0, testrunner='admin_scripts.tests.CustomTestRunner')
-
-        # Original state hasn't changed
-        self.assertEqual('DJANGO_LIVE_TEST_SERVER_ADDRESS' in os.environ, address_predefined)
-        self.assertEqual(os.environ.get('DJANGO_LIVE_TEST_SERVER_ADDRESS'), old_address)
-
-        call_command('test', verbosity=0, testrunner='admin_scripts.tests.CustomTestRunner', liveserver='blah')
-
-        # Variable was correctly set
-        self.assertEqual(os.environ['DJANGO_LIVE_TEST_SERVER_ADDRESS'], 'blah')
-
-        # Restore original state
-        if address_predefined:
-            os.environ['DJANGO_LIVE_TEST_SERVER_ADDRESS'] = old_address
-        else:
-            del os.environ['DJANGO_LIVE_TEST_SERVER_ADDRESS']
 
 
 class ManageRunserver(AdminScriptTestCase):

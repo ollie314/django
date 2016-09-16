@@ -66,7 +66,9 @@ Model field                         Form field
 
 :class:`CharField`                  :class:`~django.forms.CharField` with
                                     ``max_length`` set to the model field's
-                                    ``max_length``
+                                    ``max_length`` and
+                                    :attr:`~django.forms.CharField.empty_value`
+                                    set to ``None`` if ``null=True``.
 
 :class:`CommaSeparatedIntegerField` :class:`~django.forms.CharField`
 
@@ -195,8 +197,10 @@ we'll discuss in a moment.)::
 
     class AuthorForm(forms.Form):
         name = forms.CharField(max_length=100)
-        title = forms.CharField(max_length=3,
-                    widget=forms.Select(choices=TITLE_CHOICES))
+        title = forms.CharField(
+            max_length=3,
+            widget=forms.Select(choices=TITLE_CHOICES),
+        )
         birth_date = forms.DateField(required=False)
 
     class BookForm(forms.Form):
@@ -327,6 +331,21 @@ Note that if the form :ref:`hasn't been validated
 <validation-on-modelform>`, calling ``save()`` will do so by checking
 ``form.errors``. A ``ValueError`` will be raised if the data in the form
 doesn't validate -- i.e., if ``form.errors`` evaluates to ``True``.
+
+If an optional field doesn't appear in the form's data, the resulting model
+instance uses the model field :attr:`~django.db.models.Field.default`, if
+there is one, for that field. This behavior doesn't apply to fields that use
+:class:`~django.forms.CheckboxInput` (or any custom widget with
+``dont_use_model_field_default_for_empty_data=True``) since an unchecked
+checkbox doesn't appear in the data of an HTML form submission. Use a custom
+form field or widget if you're designing an API and want the default fallback
+for a ``BooleanField``.
+
+.. versionchanged:: 1.10.1
+
+    Older versions don't have the exception for
+    :class:`~django.forms.CheckboxInput` which means that unchecked checkboxes
+    receive a value of ``True`` if that's the model field default.
 
 This ``save()`` method accepts an optional ``commit`` keyword argument, which
 accepts either ``True`` or ``False``. If you call ``save()`` with
@@ -560,10 +579,6 @@ the field declaratively and setting its ``validators`` parameter::
             model = Article
             fields = ['pub_date', 'headline', 'content', 'reporter', 'slug']
 
-.. versionadded:: 1.9
-
-    The ``Meta.field_classes`` attribute was added.
-
 .. note::
 
     When you explicitly instantiate a form field like this, it is important to
@@ -589,8 +604,12 @@ the field declaratively and setting its ``validators`` parameter::
     For example, if the ``Article`` model looks like this::
 
         class Article(models.Model):
-            headline = models.CharField(max_length=200, null=True, blank=True,
-                                        help_text="Use puns liberally")
+            headline = models.CharField(
+                max_length=200,
+                null=True,
+                blank=True,
+                help_text='Use puns liberally',
+            )
             content = models.TextField()
 
     and you want to do some custom validation for ``headline``, while keeping
@@ -598,8 +617,11 @@ the field declaratively and setting its ``validators`` parameter::
     ``ArticleForm`` like this::
 
         class ArticleForm(ModelForm):
-            headline = MyFormField(max_length=200, required=False,
-                                   help_text="Use puns liberally")
+            headline = MyFormField(
+                max_length=200,
+                required=False,
+                help_text='Use puns liberally',
+            )
 
             class Meta:
                 model = Article
@@ -646,7 +668,7 @@ This creates a form that behaves identically to ``ArticleForm``, except there's
 some extra validation and cleaning for the ``pub_date`` field.
 
 You can also subclass the parent's ``Meta`` inner class if you want to change
-the ``Meta.fields`` or ``Meta.excludes`` lists::
+the ``Meta.fields`` or ``Meta.exclude`` lists::
 
     >>> class RestrictedArticleForm(EnhancedArticleForm):
     ...     class Meta(ArticleForm.Meta):
@@ -1022,8 +1044,10 @@ formset::
     def manage_authors(request):
         AuthorFormSet = modelformset_factory(Author, fields=('name', 'title'))
         if request.method == "POST":
-            formset = AuthorFormSet(request.POST, request.FILES,
-                                    queryset=Author.objects.filter(name__startswith='O'))
+            formset = AuthorFormSet(
+                request.POST, request.FILES,
+                queryset=Author.objects.filter(name__startswith='O'),
+            )
             if formset.is_valid():
                 formset.save()
                 # Do something.

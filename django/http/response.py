@@ -50,7 +50,13 @@ class HttpResponseBase(six.Iterator):
         self.cookies = SimpleCookie()
         self.closed = False
         if status is not None:
-            self.status_code = status
+            try:
+                self.status_code = int(status)
+            except (ValueError, TypeError):
+                raise TypeError('HTTP status code must be an integer.')
+
+            if not 100 <= self.status_code <= 599:
+                raise ValueError('HTTP status code must be an integer from 100 to 599.')
         self._reason_phrase = reason
         self._charset = charset
         if content_type is None:
@@ -240,7 +246,7 @@ class HttpResponseBase(six.Iterator):
         return force_bytes(value, self.charset)
 
     # These methods partially implement the file-like object interface.
-    # See http://docs.python.org/lib/bltin-file-objects.html
+    # See https://docs.python.org/3/library/io.html#io.IOBase
 
     # The WSGI server must call this method upon completion of the request.
     # See http://blog.dscpl.com.au/2012/10/obligations-for-calling-close-on.html

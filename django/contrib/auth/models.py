@@ -4,7 +4,6 @@ from django.contrib import auth
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.signals import user_logged_in
 from django.contrib.contenttypes.models import ContentType
-from django.core import validators
 from django.core.exceptions import PermissionDenied
 from django.core.mail import send_mail
 from django.db import models
@@ -13,6 +12,8 @@ from django.utils import six, timezone
 from django.utils.deprecation import CallableFalse, CallableTrue
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.translation import ugettext_lazy as _
+
+from .validators import ASCIIUsernameValidator, UnicodeUsernameValidator
 
 
 def update_last_login(sender, user, **kwargs):
@@ -144,6 +145,7 @@ class UserManager(BaseUserManager):
         if not username:
             raise ValueError('The given username must be set')
         email = self.normalize_email(email)
+        username = self.model.normalize_username(username)
         user = self.model(username=username, email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
@@ -278,10 +280,7 @@ class PermissionsMixin(models.Model):
         object is passed, it checks if the user has all required perms for this
         object.
         """
-        for perm in perm_list:
-            if not self.has_perm(perm, obj):
-                return False
-        return True
+        return all(self.has_perm(perm, obj) for perm in perm_list)
 
     def has_module_perms(self, app_label):
         """
@@ -302,18 +301,14 @@ class AbstractUser(AbstractBaseUser, PermissionsMixin):
 
     Username and password are required. Other fields are optional.
     """
+    username_validator = UnicodeUsernameValidator() if six.PY3 else ASCIIUsernameValidator()
+
     username = models.CharField(
         _('username'),
         max_length=150,
         unique=True,
         help_text=_('Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only.'),
-        validators=[
-            validators.RegexValidator(
-                r'^[\w.@+-]+$',
-                _('Enter a valid username. This value may contain only '
-                  'letters, numbers ' 'and @/./+/-/_ characters.')
-            ),
-        ],
+        validators=[username_validator],
         error_messages={
             'unique': _("A user with that username already exists."),
         },
@@ -345,6 +340,10 @@ class AbstractUser(AbstractBaseUser, PermissionsMixin):
         verbose_name = _('user')
         verbose_name_plural = _('users')
         abstract = True
+
+    def clean(self):
+        super(AbstractUser, self).clean()
+        self.email = self.__class__.objects.normalize_email(self.email)
 
     def get_full_name(self):
         """
@@ -413,13 +412,13 @@ class AnonymousUser(object):
     def check_password(self, raw_password):
         raise NotImplementedError("Django doesn't provide a DB representation for AnonymousUser.")
 
-    def _get_groups(self):
+    @property
+    def groups(self):
         return self._groups
-    groups = property(_get_groups)
 
-    def _get_user_permissions(self):
+    @property
+    def user_permissions(self):
         return self._user_permissions
-    user_permissions = property(_get_user_permissions)
 
     def get_group_permissions(self, obj=None):
         return set()

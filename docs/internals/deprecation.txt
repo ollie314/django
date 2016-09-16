@@ -7,6 +7,40 @@ in a backward incompatible way, following their deprecation, as per the
 :ref:`deprecation policy <internal-release-deprecation-policy>`. More details
 about each item can often be found in the release notes of two versions prior.
 
+.. _deprecation-removed-in-2.1:
+
+2.1
+---
+
+See the :ref:`Django 1.11 release notes<deprecated-features-1.11>` for more
+details on these changes.
+
+* ``contrib.auth.views.login()``, ``logout()``, ``password_change()``,
+  ``password_change_done()``, ``password_reset()``, ``password_reset_done()``,
+  ``password_reset_confirm()``, and ``password_reset_complete()`` will be
+  removed.
+
+* The ``extra_context`` parameter of ``contrib.auth.views.logout_then_login()``
+  will be removed.
+
+* ``django.test.runner.setup_databases()`` will be removed.
+
+* ``django.utils.translation.string_concat()`` will be removed.
+
+* ``django.core.cache.backends.memcached.PyLibMCCache`` will no longer support
+  passing ``pylibmc`` behavior settings as top-level attributes of ``OPTIONS``.
+
+* The ``host`` parameter of ``django.utils.http.is_safe_url()`` will be
+  removed.
+
+* Silencing of exceptions raised while rendering the ``{% include %}`` template
+  tag will be removed.
+
+* ``DatabaseIntrospection.get_indexes()`` will be removed.
+
+* The ``authenticate()`` method of authentication backends will require a
+  ``request`` argument.
+
 .. _deprecation-removed-in-2.0:
 
 2.0
@@ -174,6 +208,15 @@ details on these changes.
 
 * The ``escape`` filter will change to use
   ``django.utils.html.conditional_escape()``.
+
+* ``Manager.use_for_related_fields`` will be removed.
+
+* Model ``Manager`` inheritance will follow MRO inheritance rules and the
+  ``Meta.manager_inheritance_from_future`` to opt-in to this behavior will be
+  removed.
+
+* Support for old-style middleware using ``settings.MIDDLEWARE_CLASSES`` will
+  be removed.
 
 .. _deprecation-removed-in-1.10:
 

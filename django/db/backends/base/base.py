@@ -8,6 +8,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import DEFAULT_DB_ALIAS
 from django.db.backends import utils
+from django.db.backends.base.validation import BaseDatabaseValidation
 from django.db.backends.signals import connection_created
 from django.db.transaction import TransactionManagementError
 from django.db.utils import DatabaseError, DatabaseErrorWrapper
@@ -36,6 +37,13 @@ class BaseDatabaseWrapper(object):
     ops = None
     vendor = 'unknown'
     SchemaEditorClass = None
+    # Classes instantiated in __init__().
+    client_class = None
+    creation_class = None
+    features_class = None
+    introspection_class = None
+    ops_class = None
+    validation_class = BaseDatabaseValidation
 
     queries_limit = 9000
 
@@ -87,6 +95,20 @@ class BaseDatabaseWrapper(object):
         # Should we run the on-commit hooks the next time set_autocommit(True)
         # is called?
         self.run_commit_hooks_on_set_autocommit_on = False
+
+        self.client = self.client_class(self)
+        self.creation = self.creation_class(self)
+        self.features = self.features_class(self)
+        self.introspection = self.introspection_class(self)
+        self.ops = self.ops_class(self)
+        self.validation = self.validation_class(self)
+
+    def ensure_timezone(self):
+        """
+        Ensure the connection's timezone is set to `self.timezone_name` and
+        return whether it changed or not.
+        """
+        return False
 
     @cached_property
     def timezone(self):
@@ -617,12 +639,11 @@ class BaseDatabaseWrapper(object):
 
     def run_and_clear_commit_hooks(self):
         self.validate_no_atomic_block()
-        try:
-            while self.run_on_commit:
-                sids, func = self.run_on_commit.pop(0)
-                func()
-        finally:
-            self.run_on_commit = []
+        current_run_on_commit = self.run_on_commit
+        self.run_on_commit = []
+        while current_run_on_commit:
+            sids, func = current_run_on_commit.pop(0)
+            func()
 
     def copy(self, alias=None, allow_thread_sharing=None):
         """

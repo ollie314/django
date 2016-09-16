@@ -200,42 +200,30 @@ class LegacyDatabaseTests(TestCase):
     def test_query_datetimes(self):
         Event.objects.create(dt=datetime.datetime(2011, 1, 1, 1, 30, 0))
         Event.objects.create(dt=datetime.datetime(2011, 1, 1, 4, 30, 0))
-        self.assertQuerysetEqual(
-            Event.objects.datetimes('dt', 'year'),
-            [datetime.datetime(2011, 1, 1, 0, 0, 0)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
-            Event.objects.datetimes('dt', 'month'),
-            [datetime.datetime(2011, 1, 1, 0, 0, 0)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
-            Event.objects.datetimes('dt', 'day'),
-            [datetime.datetime(2011, 1, 1, 0, 0, 0)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+        self.assertSequenceEqual(Event.objects.datetimes('dt', 'year'), [datetime.datetime(2011, 1, 1, 0, 0, 0)])
+        self.assertSequenceEqual(Event.objects.datetimes('dt', 'month'), [datetime.datetime(2011, 1, 1, 0, 0, 0)])
+        self.assertSequenceEqual(Event.objects.datetimes('dt', 'day'), [datetime.datetime(2011, 1, 1, 0, 0, 0)])
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'hour'),
             [datetime.datetime(2011, 1, 1, 1, 0, 0),
-             datetime.datetime(2011, 1, 1, 4, 0, 0)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+             datetime.datetime(2011, 1, 1, 4, 0, 0)]
+        )
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'minute'),
             [datetime.datetime(2011, 1, 1, 1, 30, 0),
-             datetime.datetime(2011, 1, 1, 4, 30, 0)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+             datetime.datetime(2011, 1, 1, 4, 30, 0)]
+        )
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'second'),
             [datetime.datetime(2011, 1, 1, 1, 30, 0),
-             datetime.datetime(2011, 1, 1, 4, 30, 0)],
-            transform=lambda d: d)
+             datetime.datetime(2011, 1, 1, 4, 30, 0)]
+        )
 
     def test_raw_sql(self):
         # Regression test for #17755
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30)
         event = Event.objects.create(dt=dt)
-        self.assertQuerysetEqual(
-            Event.objects.raw('SELECT * FROM timezones_event WHERE dt = %s', [dt]),
-            [event],
-            transform=lambda d: d)
+        self.assertSequenceEqual(list(Event.objects.raw('SELECT * FROM timezones_event WHERE dt = %s', [dt])), [event])
 
     def test_cursor_execute_accepts_naive_datetime(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30)
@@ -469,78 +457,75 @@ class NewDatabaseTests(TestCase):
     def test_query_datetimes(self):
         Event.objects.create(dt=datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=EAT))
         Event.objects.create(dt=datetime.datetime(2011, 1, 1, 4, 30, 0, tzinfo=EAT))
-        self.assertQuerysetEqual(
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'year'),
-            [datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=EAT)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+            [datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=EAT)]
+        )
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'month'),
-            [datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=EAT)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+            [datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=EAT)]
+        )
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'day'),
-            [datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=EAT)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+            [datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=EAT)]
+        )
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'hour'),
             [datetime.datetime(2011, 1, 1, 1, 0, 0, tzinfo=EAT),
-             datetime.datetime(2011, 1, 1, 4, 0, 0, tzinfo=EAT)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+             datetime.datetime(2011, 1, 1, 4, 0, 0, tzinfo=EAT)]
+        )
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'minute'),
             [datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=EAT),
-             datetime.datetime(2011, 1, 1, 4, 30, 0, tzinfo=EAT)],
-            transform=lambda d: d)
-        self.assertQuerysetEqual(
+             datetime.datetime(2011, 1, 1, 4, 30, 0, tzinfo=EAT)]
+        )
+        self.assertSequenceEqual(
             Event.objects.datetimes('dt', 'second'),
             [datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=EAT),
-             datetime.datetime(2011, 1, 1, 4, 30, 0, tzinfo=EAT)],
-            transform=lambda d: d)
+             datetime.datetime(2011, 1, 1, 4, 30, 0, tzinfo=EAT)]
+        )
 
     @skipUnlessDBFeature('has_zoneinfo_database')
     def test_query_datetimes_in_other_timezone(self):
         Event.objects.create(dt=datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=EAT))
         Event.objects.create(dt=datetime.datetime(2011, 1, 1, 4, 30, 0, tzinfo=EAT))
         with timezone.override(UTC):
-            self.assertQuerysetEqual(
+            self.assertSequenceEqual(
                 Event.objects.datetimes('dt', 'year'),
                 [datetime.datetime(2010, 1, 1, 0, 0, 0, tzinfo=UTC),
-                 datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=UTC)],
-                transform=lambda d: d)
-            self.assertQuerysetEqual(
+                 datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=UTC)]
+            )
+            self.assertSequenceEqual(
                 Event.objects.datetimes('dt', 'month'),
                 [datetime.datetime(2010, 12, 1, 0, 0, 0, tzinfo=UTC),
-                 datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=UTC)],
-                transform=lambda d: d)
-            self.assertQuerysetEqual(
+                 datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=UTC)]
+            )
+            self.assertSequenceEqual(
                 Event.objects.datetimes('dt', 'day'),
                 [datetime.datetime(2010, 12, 31, 0, 0, 0, tzinfo=UTC),
-                 datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=UTC)],
-                transform=lambda d: d)
-            self.assertQuerysetEqual(
+                 datetime.datetime(2011, 1, 1, 0, 0, 0, tzinfo=UTC)]
+            )
+            self.assertSequenceEqual(
                 Event.objects.datetimes('dt', 'hour'),
                 [datetime.datetime(2010, 12, 31, 22, 0, 0, tzinfo=UTC),
-                 datetime.datetime(2011, 1, 1, 1, 0, 0, tzinfo=UTC)],
-                transform=lambda d: d)
-            self.assertQuerysetEqual(
+                 datetime.datetime(2011, 1, 1, 1, 0, 0, tzinfo=UTC)]
+            )
+            self.assertSequenceEqual(
                 Event.objects.datetimes('dt', 'minute'),
                 [datetime.datetime(2010, 12, 31, 22, 30, 0, tzinfo=UTC),
-                 datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=UTC)],
-                transform=lambda d: d)
-            self.assertQuerysetEqual(
+                 datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=UTC)]
+            )
+            self.assertSequenceEqual(
                 Event.objects.datetimes('dt', 'second'),
                 [datetime.datetime(2010, 12, 31, 22, 30, 0, tzinfo=UTC),
-                 datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=UTC)],
-                transform=lambda d: d)
+                 datetime.datetime(2011, 1, 1, 1, 30, 0, tzinfo=UTC)]
+            )
 
     def test_raw_sql(self):
         # Regression test for #17755
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30, tzinfo=EAT)
         event = Event.objects.create(dt=dt)
-        self.assertQuerysetEqual(
-            Event.objects.raw('SELECT * FROM timezones_event WHERE dt = %s', [dt]),
-            [event],
-            transform=lambda d: d)
+        self.assertSequenceEqual(list(Event.objects.raw('SELECT * FROM timezones_event WHERE dt = %s', [dt])), [event])
 
     @skipUnlessDBFeature('supports_timezones')
     def test_cursor_execute_accepts_aware_datetime(self):
@@ -588,7 +573,7 @@ class NewDatabaseTests(TestCase):
     def test_null_datetime(self):
         # Regression test for #17294
         e = MaybeEvent.objects.create()
-        self.assertEqual(e.dt, None)
+        self.assertIsNone(e.dt)
 
 
 @override_settings(TIME_ZONE='Africa/Nairobi', USE_TZ=True)
@@ -840,7 +825,7 @@ class SerializationTests(SimpleTestCase):
 
 
 @override_settings(DATETIME_FORMAT='c', TIME_ZONE='Africa/Nairobi', USE_L10N=False, USE_TZ=True)
-class TemplateTests(TestCase):
+class TemplateTests(SimpleTestCase):
 
     @requires_tz_support
     def test_localtime_templatetag_and_filters(self):

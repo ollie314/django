@@ -1,9 +1,8 @@
-from django.contrib.gis import forms
+from django.contrib.gis import forms, gdal
 from django.contrib.gis.db.models.lookups import (
     RasterBandTransform, gis_lookups,
 )
 from django.contrib.gis.db.models.proxy import SpatialProxy
-from django.contrib.gis.gdal import HAS_GDAL
 from django.contrib.gis.gdal.error import GDALException
 from django.contrib.gis.geometry.backend import Geometry, GeometryException
 from django.core.exceptions import ImproperlyConfigured
@@ -79,6 +78,7 @@ class BaseSpatialField(Field):
     of the spatial reference system of the field.
     """
     description = _("The base GIS field.")
+    empty_strings_allowed = False
     # Geodetic units.
     geodetic_units = ('decimal degree', 'degree')
 
@@ -182,6 +182,23 @@ class BaseSpatialField(Field):
         else:
             return connection.ops.Adapter(self.get_prep_value(value))
 
+    def get_raster_prep_value(self, value, is_candidate):
+        """
+        Return a GDALRaster if conversion is successful, otherwise return None.
+        """
+        if isinstance(value, gdal.GDALRaster):
+            return value
+        elif is_candidate:
+            try:
+                return gdal.GDALRaster(value)
+            except GDALException:
+                pass
+        elif isinstance(value, dict):
+            try:
+                return gdal.GDALRaster(value)
+            except GDALException:
+                raise ValueError("Couldn't create spatial object from lookup value '%s'." % value)
+
     def get_prep_value(self, value):
         """
         Spatial lookup values are either a parameter that is (or may be
@@ -190,9 +207,8 @@ class BaseSpatialField(Field):
         geometry or raster value properly and preserves any other lookup
         parameters.
         """
-        from django.contrib.gis.gdal import GDALRaster
-
         value = super(BaseSpatialField, self).get_prep_value(value)
+
         # For IsValid lookups, boolean values are allowed.
         if isinstance(value, (Expression, bool)):
             return value
@@ -205,23 +221,23 @@ class BaseSpatialField(Field):
 
         # When the input is not a geometry or raster, attempt to construct one
         # from the given string input.
-        if isinstance(obj, (Geometry, GDALRaster)):
+        if isinstance(obj, Geometry):
             pass
-        elif isinstance(obj, (bytes, six.string_types)) or hasattr(obj, '__geo_interface__'):
-            try:
-                obj = Geometry(obj)
-            except (GeometryException, GDALException):
-                try:
-                    obj = GDALRaster(obj)
-                except GDALException:
-                    raise ValueError("Couldn't create spatial object from lookup value '%s'." % obj)
-        elif isinstance(obj, dict):
-            try:
-                obj = GDALRaster(obj)
-            except GDALException:
-                raise ValueError("Couldn't create spatial object from lookup value '%s'." % obj)
         else:
-            raise ValueError('Cannot use object with type %s for a spatial lookup parameter.' % type(obj).__name__)
+            # Check if input is a candidate for conversion to raster or geometry.
+            is_candidate = isinstance(obj, (bytes, six.string_types)) or hasattr(obj, '__geo_interface__')
+            # Try to convert the input to raster.
+            raster = self.get_raster_prep_value(obj, is_candidate)
+
+            if raster:
+                obj = raster
+            elif is_candidate:
+                try:
+                    obj = Geometry(obj)
+                except (GeometryException, GDALException):
+                    raise ValueError("Couldn't create spatial object from lookup value '%s'." % obj)
+            else:
+                raise ValueError('Cannot use object with type %s for a spatial lookup parameter.' % type(obj).__name__)
 
         # Assigning the SRID value.
         obj.srid = self.get_srid(obj)
@@ -294,48 +310,6 @@ class GeometryField(GeoSelectFormatMixin, BaseSpatialField):
         then 1000 would be returned.
         """
         return connection.ops.get_distance(self, value, lookup_type)
-
-    def get_prep_value(self, value):
-        """
-        Spatial lookup values are either a parameter that is (or may be
-        converted to) a geometry, or a sequence of lookup values that
-        begins with a geometry.  This routine will setup the geometry
-        value properly, and preserve any other lookup parameters before
-        returning to the caller.
-        """
-        from django.contrib.gis.gdal import GDALRaster
-
-        value = super(GeometryField, self).get_prep_value(value)
-        if isinstance(value, (Expression, bool)):
-            return value
-        elif isinstance(value, (tuple, list)):
-            geom = value[0]
-            seq_value = True
-        else:
-            geom = value
-            seq_value = False
-
-        # When the input is not a GEOS geometry, attempt to construct one
-        # from the given string input.
-        if isinstance(geom, (Geometry, GDALRaster)):
-            pass
-        elif isinstance(geom, (bytes, six.string_types)) or hasattr(geom, '__geo_interface__'):
-            try:
-                geom = Geometry(geom)
-            except GeometryException:
-                raise ValueError('Could not create geometry from lookup value.')
-        else:
-            raise ValueError('Cannot use object with type %s for a geometry lookup parameter.' % type(geom).__name__)
-
-        # Assigning the SRID value.
-        geom.srid = self.get_srid(geom)
-
-        if seq_value:
-            lookup_val = [geom]
-            lookup_val.extend(value[1:])
-            return tuple(lookup_val)
-        else:
-            return geom
 
     def from_db_value(self, value, expression, connection, context):
         if value:
@@ -447,11 +421,6 @@ class RasterField(BaseSpatialField):
     geom_type = 'RASTER'
     geography = False
 
-    def __init__(self, *args, **kwargs):
-        if not HAS_GDAL:
-            raise ImproperlyConfigured('RasterField requires GDAL.')
-        super(RasterField, self).__init__(*args, **kwargs)
-
     def _check_connection(self, connection):
         # Make sure raster fields are used only on backends with raster support.
         if not connection.features.gis_enabled or not connection.features.supports_raster:
@@ -473,13 +442,11 @@ class RasterField(BaseSpatialField):
 
     def contribute_to_class(self, cls, name, **kwargs):
         super(RasterField, self).contribute_to_class(cls, name, **kwargs)
-        # Importing GDALRaster raises an exception on systems without gdal.
-        from django.contrib.gis.gdal import GDALRaster
         # Setup for lazy-instantiated Raster object. For large querysets, the
         # instantiation of all GDALRasters can potentially be expensive. This
         # delays the instantiation of the objects to the moment of evaluation
         # of the raster attribute.
-        setattr(cls, self.attname, SpatialProxy(GDALRaster, self))
+        setattr(cls, self.attname, SpatialProxy(gdal.GDALRaster, self))
 
     def get_transform(self, name):
         try:

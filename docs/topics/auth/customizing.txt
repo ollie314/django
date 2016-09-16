@@ -89,31 +89,36 @@ Writing an authentication backend
 ---------------------------------
 
 An authentication backend is a class that implements two required methods:
-``get_user(user_id)`` and ``authenticate(**credentials)``, as well as a set of
-optional permission related :ref:`authorization methods <authorization_methods>`.
+``get_user(user_id)`` and ``authenticate(request, **credentials)``, as well as
+a set of optional permission related :ref:`authorization methods
+<authorization_methods>`.
 
 The ``get_user`` method takes a ``user_id`` -- which could be a username,
 database ID or whatever, but has to be the primary key of your ``User`` object
 -- and returns a ``User`` object.
 
-The ``authenticate`` method takes credentials as keyword arguments. Most of
-the time, it'll just look like this::
+The ``authenticate`` method takes a ``request`` argument and credentials as
+keyword arguments. Most of the time, it'll just look like this::
 
     class MyBackend(object):
-        def authenticate(self, username=None, password=None):
+        def authenticate(self, request, username=None, password=None):
             # Check the username/password and return a User.
             ...
 
 But it could also authenticate a token, like so::
 
     class MyBackend(object):
-        def authenticate(self, token=None):
+        def authenticate(self, request, token=None):
             # Check the token and return a User.
             ...
 
 Either way, ``authenticate`` should check the credentials it gets, and it
 should return a ``User`` object that matches those credentials, if the
 credentials are valid. If they're not valid, it should return ``None``.
+
+``request`` is an :class:`~django.http.HttpRequest` and may be ``None`` if it
+wasn't provided to :func:`~django.contrib.auth.authenticate` (which passes it
+on to the backend).
 
 The Django admin is tightly coupled to the Django :ref:`User object
 <user-objects>`. The best way to deal with this is to create a Django ``User``
@@ -140,7 +145,7 @@ object the first time a user authenticates::
         ADMIN_PASSWORD = 'pbkdf2_sha256$30000$Vo0VlMnkR4Bk$qEvtdyZRWTcOsCnI/oQ7fVOu1XAURIZYoOZ3iq8Dr4M='
         """
 
-        def authenticate(self, username=None, password=None):
+        def authenticate(self, request, username=None, password=None):
             login_valid = (settings.ADMIN_LOGIN == username)
             pwd_valid = check_password(password, settings.ADMIN_PASSWORD)
             if login_valid and pwd_valid:
@@ -162,6 +167,11 @@ object the first time a user authenticates::
                 return User.objects.get(pk=user_id)
             except User.DoesNotExist:
                 return None
+
+.. versionchanged:: 1.11
+
+    The ``request`` parameter was added to ``authenticate()`` and support for
+    backends that don't accept it will be removed in Django 2.1.
 
 .. _authorization_methods:
 
@@ -595,13 +605,9 @@ password resets. You must then provide some key implementation details:
 
     .. admonition:: Importing ``AbstractBaseUser``
 
-        .. versionadded:: 1.9
-
         ``AbstractBaseUser`` and ``BaseUserManager`` are importable from
         ``django.contrib.auth.base_user`` so that they can be imported without
-        including ``django.contrib.auth`` in :setting:`INSTALLED_APPS` (this
-        raised a deprecation warning in older versions and is no longer
-        supported in Django 1.9).
+        including ``django.contrib.auth`` in :setting:`INSTALLED_APPS`.
 
 The following attributes and methods are available on any subclass of
 :class:`~django.contrib.auth.models.AbstractBaseUser`:
@@ -611,6 +617,22 @@ The following attributes and methods are available on any subclass of
     .. method:: get_username()
 
         Returns the value of the field nominated by ``USERNAME_FIELD``.
+
+    .. method:: clean()
+
+        .. versionadded:: 1.10
+
+        Normalizes the username by calling :meth:`normalize_username`. If you
+        override this method, be sure to call ``super()`` to retain the
+        normalization.
+
+    .. classmethod:: normalize_username(username)
+
+        .. versionadded:: 1.10
+
+        Applies NFKC Unicode normalization to usernames so that visually
+        identical characters with different Unicode code points are considered
+        identical.
 
     .. attribute:: models.AbstractBaseUser.is_authenticated
 
@@ -680,6 +702,18 @@ The following attributes and methods are available on any subclass of
         Returns an HMAC of the password field. Used for
         :ref:`session-invalidation-on-password-change`.
 
+:class:`~models.AbstractUser` subclasses :class:`~models.AbstractBaseUser`:
+
+.. class:: models.AbstractUser
+
+    .. method:: clean()
+
+        .. versionadded:: 1.11
+
+        Normalizes the email by calling
+        :meth:`.BaseUserManager.normalize_email`. If you override this method,
+        be sure to call ``super()`` to retain the normalization.
+
 You should also define a custom manager for your ``User`` model. If your
 ``User`` model defines ``username``, ``email``, ``is_staff``, ``is_active``,
 ``is_superuser``, ``last_login``, and ``date_joined`` fields the same as
@@ -747,7 +781,7 @@ Extending Django's default ``User``
 
 If you're entirely happy with Django's :class:`~django.contrib.auth.models.User`
 model and you just want to add some additional profile information, you could
-simply subclass ``django.contrib.auth.models.AbstractUser`` and add your
+simply subclass :class:`django.contrib.auth.models.AbstractUser` and add your
 custom profile fields, although we'd recommend a separate model as described in
 the "Model design considerations" note of :ref:`specifying-custom-user-model`.
 ``AbstractUser`` provides the full implementation of the default
@@ -963,9 +997,10 @@ authentication app::
             Creates and saves a superuser with the given email, date of
             birth and password.
             """
-            user = self.create_user(email,
+            user = self.create_user(
+                email,
                 password=password,
-                date_of_birth=date_of_birth
+                date_of_birth=date_of_birth,
             )
             user.is_admin = True
             user.save(using=self._db)
@@ -1108,3 +1143,28 @@ Finally, specify the custom model as the default user model for your project
 using the :setting:`AUTH_USER_MODEL` setting in your ``settings.py``::
 
     AUTH_USER_MODEL = 'customauth.MyUser'
+
+.. _using-auth-without-models:
+
+Using ``contrib.auth`` without the built-in models
+==================================================
+
+The models shipped with ``contrib.auth`` may not be required. For example, if
+you :ref:`customize the user model <auth-custom-user>` and don't use the
+:class:`~django.contrib.auth.models.Permission` and
+:class:`~django.contrib.auth.models.Group` models, then the ``auth`` tables
+may be unused. To avoid creating these tables, modify the
+:setting:`MIGRATION_MODULES` setting and disable the migrations for the
+``auth`` app::
+
+    MIGRATION_MODULES = {'auth': None}
+
+To prevent creation of the default permissions, change ``'django.contrib.auth'``
+in :setting:`INSTALLED_APPS` to
+:class:`django.contrib.auth.apps.BaseAuthConfig`::
+
+    INSTALLED_APPS = [
+        ...
+        'django.contrib.auth.apps.BaseAuthConfig',
+        ...
+    ]

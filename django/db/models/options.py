@@ -1,5 +1,6 @@
 from __future__ import unicode_literals
 
+import copy
 import warnings
 from bisect import bisect
 from collections import OrderedDict, defaultdict
@@ -9,6 +10,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist
 from django.db import connections
+from django.db.models import Manager
 from django.db.models.fields import AutoField
 from django.db.models.fields.proxy import OrderWrt
 from django.utils import six
@@ -16,12 +18,10 @@ from django.utils.datastructures import ImmutableList, OrderedSet
 from django.utils.deprecation import (
     RemovedInDjango20Warning, warn_about_renamed_method,
 )
-from django.utils.encoding import (
-    force_text, python_2_unicode_compatible, smart_text,
-)
+from django.utils.encoding import force_text, python_2_unicode_compatible
 from django.utils.functional import cached_property
-from django.utils.text import camel_case_to_spaces
-from django.utils.translation import override, string_concat
+from django.utils.text import camel_case_to_spaces, format_lazy
+from django.utils.translation import override
 
 NOT_PROVIDED = object()
 
@@ -40,7 +40,8 @@ DEFAULT_NAMES = (
     'app_label', 'db_tablespace', 'abstract', 'managed', 'proxy', 'swappable',
     'auto_created', 'index_together', 'apps', 'default_permissions',
     'select_on_save', 'default_related_name', 'required_db_features',
-    'required_db_vendor',
+    'required_db_vendor', 'base_manager_name', 'default_manager_name',
+    'manager_inheritance_from_future', 'indexes',
 )
 
 
@@ -72,8 +73,11 @@ def make_immutable_fields_list(name, data):
 
 @python_2_unicode_compatible
 class Options(object):
-    FORWARD_PROPERTIES = {'fields', 'many_to_many', 'concrete_fields',
-                          'local_concrete_fields', '_forward_fields_map'}
+    FORWARD_PROPERTIES = {
+        'fields', 'many_to_many', 'concrete_fields', 'local_concrete_fields',
+        '_forward_fields_map', 'managers', 'managers_map', 'base_manager',
+        'default_manager',
+    }
     REVERSE_PROPERTIES = {'related_objects', 'fields_map', '_relation_tree'}
 
     default_apps = apps
@@ -83,12 +87,17 @@ class Options(object):
         self.local_fields = []
         self.local_many_to_many = []
         self.private_fields = []
+        self.manager_inheritance_from_future = False
+        self.local_managers = []
+        self.base_manager_name = None
+        self.default_manager_name = None
         self.model_name = None
         self.verbose_name = None
         self.verbose_name_plural = None
         self.db_table = ''
         self.ordering = []
         self._ordering_clash = False
+        self.indexes = []
         self.unique_together = []
         self.index_together = []
         self.select_on_save = False
@@ -122,12 +131,6 @@ class Options(object):
         self.parents = OrderedDict()
         self.auto_created = False
 
-        # To handle various inheritance situations, we need to track where
-        # managers came from (concrete or abstract base classes). `managers`
-        # keeps a list of 3-tuples of the form:
-        # (creation_counter, instance, abstract(=True))
-        self.managers = []
-
         # List of all lookups defined in ForeignKey 'limit_choices_to' options
         # from *other* models. Needed for some admin checks. Internal use only.
         self.related_fkey_lookups = []
@@ -153,20 +156,6 @@ class Options(object):
     @property
     def installed(self):
         return self.app_config is not None
-
-    @property
-    def abstract_managers(self):
-        return [
-            (counter, instance.name, instance) for counter, instance, abstract
-            in self.managers if abstract
-        ]
-
-    @property
-    def concrete_managers(self):
-        return [
-            (counter, instance.name, instance) for counter, instance, abstract
-            in self.managers if not abstract
-        ]
 
     def contribute_to_class(self, cls, name):
         from django.db import connection
@@ -206,7 +195,7 @@ class Options(object):
             # verbose_name_plural is a special case because it uses a 's'
             # by default.
             if self.verbose_name_plural is None:
-                self.verbose_name_plural = string_concat(self.verbose_name, 's')
+                self.verbose_name_plural = format_lazy('{}s', self.verbose_name)
 
             # order_with_respect_and ordering are mutually exclusive.
             self._ordering_clash = bool(self.ordering and self.order_with_respect_to)
@@ -215,7 +204,7 @@ class Options(object):
             if meta_attrs != {}:
                 raise TypeError("'class Meta' got invalid attribute(s): %s" % ','.join(meta_attrs.keys()))
         else:
-            self.verbose_name_plural = string_concat(self.verbose_name, 's')
+            self.verbose_name_plural = format_lazy('{}s', self.verbose_name)
         del self.meta
 
         # If the db_table wasn't provided, use the app_label + model_name.
@@ -263,6 +252,10 @@ class Options(object):
             else:
                 auto = AutoField(verbose_name='ID', primary_key=True, auto_created=True)
                 model.add_to_class('id', auto)
+
+    def add_manager(self, manager):
+        self.local_managers.append(manager)
+        self._expire_cache()
 
     def add_field(self, field, private=False, virtual=NOT_PROVIDED):
         if virtual is not NOT_PROVIDED:
@@ -318,7 +311,7 @@ class Options(object):
         return '<Options for %s>' % self.object_name
 
     def __str__(self):
-        return "%s.%s" % (smart_text(self.app_label), smart_text(self.model_name))
+        return "%s.%s" % (self.app_label, self.model_name)
 
     def can_migrate(self, connection):
         """
@@ -370,6 +363,105 @@ class Options(object):
                 if '%s.%s' % (swapped_label, swapped_object.lower()) != self.label_lower:
                     return swapped_for
         return None
+
+    @cached_property
+    def managers(self):
+        managers = []
+        seen_managers = set()
+        bases = (b for b in self.model.mro() if hasattr(b, '_meta'))
+        for depth, base in enumerate(bases):
+            for manager in base._meta.local_managers:
+                if manager.name in seen_managers:
+                    continue
+
+                manager = copy.copy(manager)
+                manager.model = self.model
+                seen_managers.add(manager.name)
+                managers.append((depth, manager.creation_counter, manager))
+
+                # Used for deprecation of legacy manager inheritance,
+                # remove afterwards. (RemovedInDjango20Warning)
+                manager._originating_model = base
+
+        return make_immutable_fields_list(
+            "managers",
+            (m[2] for m in sorted(managers)),
+        )
+
+    @cached_property
+    def managers_map(self):
+        return {manager.name: manager for manager in self.managers}
+
+    @cached_property
+    def base_manager(self):
+        base_manager_name = self.base_manager_name
+        if not base_manager_name:
+            # Get the first parent's base_manager_name if there's one.
+            for parent in self.model.mro()[1:]:
+                if hasattr(parent, '_meta'):
+                    if parent._base_manager.name != '_base_manager':
+                        base_manager_name = parent._base_manager.name
+                    break
+
+        if base_manager_name:
+            try:
+                return self.managers_map[base_manager_name]
+            except KeyError:
+                raise ValueError(
+                    "%s has no manager named %r" % (
+                        self.object_name,
+                        base_manager_name,
+                    )
+                )
+
+        # Deprecation shim for `use_for_related_fields`.
+        for i, base_manager_class in enumerate(self.default_manager.__class__.mro()):
+            if getattr(base_manager_class, 'use_for_related_fields', False):
+                if not getattr(base_manager_class, 'silence_use_for_related_fields_deprecation', False):
+                    warnings.warn(
+                        "use_for_related_fields is deprecated, instead "
+                        "set Meta.base_manager_name on '{}'.".format(self.model._meta.label),
+                        RemovedInDjango20Warning, 2
+                    )
+
+                if i == 0:
+                    manager = self.default_manager
+                else:
+                    manager = base_manager_class()
+                    manager.name = '_base_manager'
+                    manager.model = self.model
+
+                return manager
+
+        manager = Manager()
+        manager.name = '_base_manager'
+        manager.model = self.model
+        manager.auto_created = True
+        return manager
+
+    @cached_property
+    def default_manager(self):
+        default_manager_name = self.default_manager_name
+        if not default_manager_name and not self.local_managers:
+            # Get the first parent's default_manager_name if there's one.
+            for parent in self.model.mro()[1:]:
+                if hasattr(parent, '_meta'):
+                    default_manager_name = parent._meta.default_manager_name
+                    break
+
+        if default_manager_name:
+            try:
+                return self.managers_map[default_manager_name]
+            except KeyError:
+                raise ValueError(
+                    "%s has no manager named %r" % (
+                        self.object_name,
+                        default_manager_name,
+                    )
+                )
+
+        if self.managers:
+            return self.managers[0]
 
     @cached_property
     def fields(self):

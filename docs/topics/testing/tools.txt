@@ -379,8 +379,6 @@ Use the ``django.test.Client`` class to make requests.
 
     .. method:: Client.force_login(user, backend=None)
 
-        .. versionadded:: 1.9
-
         If your site uses Django's :doc:`authentication
         system</topics/auth/index>`, you can use the ``force_login()`` method
         to simulate the effect of a user logging into the site. Use this method
@@ -460,8 +458,6 @@ Specifically, a ``Response`` object has the following attributes:
             may be a suitable alternative on responses with that attribute.
 
     .. method:: json(**kwargs)
-
-        .. versionadded:: 1.9
 
         The body of the response, parsed as JSON. Extra keyword arguments are
         passed to :func:`json.loads`. For example::
@@ -574,6 +570,44 @@ can access these properties as part of a test condition.
             session['somekey'] = 'test'
             session.save()
 
+Setting the language
+--------------------
+
+When testing applications that support internationalization and localization,
+you might want to set the language for a test client request. The method for
+doing so depends on whether or not the
+:class:`~django.middleware.locale.LocaleMiddleware` is enabled.
+
+If the middleware is enabled, the language can be set by creating a cookie with
+a name of :setting:`LANGUAGE_COOKIE_NAME` and a value of the language code::
+
+    from django.conf import settings
+
+    def test_language_using_cookie(self):
+        self.client.cookies.load({settings.LANGUAGE_COOKIE_NAME: 'fr'})
+        response = self.client.get('/')
+        self.assertEqual(response.content, b"Bienvenue sur mon site.")
+
+or by including the ``Accept-Language`` HTTP header in the request::
+
+    def test_language_using_header(self):
+        response = self.client.get('/', HTTP_ACCEPT_LANGUAGE='fr')
+        self.assertEqual(response.content, b"Bienvenue sur mon site.")
+
+More details are in :ref:`how-django-discovers-language-preference`.
+
+If the middleware isn't enabled, the active language may be set using
+:func:`.translation.override`::
+
+    from django.utils import translation
+
+    def test_language_using_override(self):
+        with translation.override('fr'):
+            response = self.client.get('/')
+        self.assertEqual(response.content, b"Bienvenue sur mon site.")
+
+More details are in :ref:`explicitly-setting-the-active-language`.
+
 Example
 -------
 
@@ -657,8 +691,6 @@ If your tests make any database queries, use subclasses
 :class:`~django.test.TransactionTestCase` or :class:`~django.test.TestCase`.
 
 .. attribute:: SimpleTestCase.allow_database_queries
-
-    .. versionadded:: 1.9
 
     :class:`~SimpleTestCase` disallows database queries by default. This
     helps to avoid executing write queries which will affect other tests
@@ -820,50 +852,16 @@ This allows the use of automated test clients other than the
 client, to execute a series of functional tests inside a browser and simulate a
 real user's actions.
 
-By default the live server listens on ``localhost`` and picks the first
-available port in the ``8081-8179`` range. Its full URL can be accessed with
+The live server listens on ``localhost`` and binds to port 0 which uses a free
+port assigned by the operating system. The server's URL can be accessed with
 ``self.live_server_url`` during the tests.
 
-.. versionchanged:: 1.9
+.. versionchanged:: 1.11
 
-    In earlier versions, the live server's default address was always
-    ``'localhost:8081'``.
-
-If you'd like to select another address, you may pass a different one using the
-:option:`test --liveserver` option, for example:
-
-.. code-block:: console
-
-    $ ./manage.py test --liveserver=localhost:8082
-
-.. versionchanged:: 1.9
-
-    In older versions ``live_server_url`` could only be accessed from an
-    instance. It now is a class property and can be accessed from class methods
-    like ``setUpClass()``.
-
-Another way of changing the default server address is by setting the
-`DJANGO_LIVE_TEST_SERVER_ADDRESS` environment variable somewhere in your
-code (for example, in a :ref:`custom test runner<topics-testing-test_runner>`)::
-
-    import os
-    os.environ['DJANGO_LIVE_TEST_SERVER_ADDRESS'] = 'localhost:8082'
-
-In the case where the tests are run by multiple processes in parallel (for
-example, in the context of several simultaneous `continuous integration`_
-builds), the processes will compete for the same address, and therefore your
-tests might randomly fail with an "Address already in use" error. To avoid this
-problem, you can pass a comma-separated list of ports or ranges of ports (at
-least as many as the number of potential parallel processes). For example:
-
-.. code-block:: console
-
-    $ ./manage.py test --liveserver=localhost:8082,8090-8100,9000-9200,7041
-
-Then, during test execution, each new live test server will try every specified
-port until it finds one that is free and takes it.
-
-.. _continuous integration: https://en.wikipedia.org/wiki/Continuous_integration
+    In older versions, Django tried a predefined port range which could be
+    customized in various ways including the ``DJANGO_LIVE_TEST_SERVER_ADDRESS``
+    environment variable. This is removed in favor of the simpler "bind to port
+    0" technique.
 
 To demonstrate how to use ``LiveServerTestCase``, let's write a simple Selenium
 test. First of all, you need to install the `selenium package`_ into your
@@ -958,7 +956,7 @@ out the `full reference`_ for more details.
     use cases. Please refer to the `Selenium FAQ`_ and
     `Selenium documentation`_ for more information.
 
-    .. _Selenium FAQ: https://code.google.com/p/selenium/wiki/FrequentlyAskedQuestions#Q:_WebDriver_fails_to_find_elements_/_Does_not_block_on_page_loa
+    .. _Selenium FAQ: https://web.archive.org/web/20160129132110/http://code.google.com/p/selenium/wiki/FrequentlyAskedQuestions#Q:_WebDriver_fails_to_find_elements_/_Does_not_block_on_page_loa
     .. _Selenium documentation: http://seleniumhq.org/docs/04_webdriver_advanced.html#explicit-waits
 
 Test cases features
@@ -1182,7 +1180,7 @@ easy::
     class MiddlewareTestCase(TestCase):
 
         def test_cache_middleware(self):
-            with self.modify_settings(MIDDLEWARE_CLASSES={
+            with self.modify_settings(MIDDLEWARE={
                 'append': 'django.middleware.cache.FetchFromCacheMiddleware',
                 'prepend': 'django.middleware.cache.UpdateCacheMiddleware',
                 'remove': [
@@ -1233,7 +1231,7 @@ decorator::
 
     class MiddlewareTestCase(TestCase):
 
-        @modify_settings(MIDDLEWARE_CLASSES={
+        @modify_settings(MIDDLEWARE={
             'append': 'django.middleware.cache.FetchFromCacheMiddleware',
             'prepend': 'django.middleware.cache.UpdateCacheMiddleware',
         })
@@ -1245,7 +1243,7 @@ The decorator can also be applied to test case classes::
 
     from django.test import TestCase, modify_settings
 
-    @modify_settings(MIDDLEWARE_CLASSES={
+    @modify_settings(MIDDLEWARE={
         'append': 'django.middleware.cache.FetchFromCacheMiddleware',
         'prepend': 'django.middleware.cache.UpdateCacheMiddleware',
     })

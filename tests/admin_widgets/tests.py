@@ -116,7 +116,7 @@ class AdminFormfieldForDBFieldTests(SimpleTestCase):
     def test_radio_fields_ForeignKey(self):
         ff = self.assertFormfield(models.Event, 'main_band', widgets.AdminRadioSelect,
                                   radio_fields={'main_band': admin.VERTICAL})
-        self.assertEqual(ff.empty_label, None)
+        self.assertIsNone(ff.empty_label)
 
     def test_many_to_many(self):
         self.assertFormfield(models.Band, 'members', forms.SelectMultiple)
@@ -1222,7 +1222,7 @@ class AdminRawIdWidgetSeleniumTests(AdminWidgetSeleniumTestCase):
 
         # Help text for the field is displayed
         self.assertEqual(
-            self.selenium.find_element_by_css_selector('.field-supporting_bands p.help').text,
+            self.selenium.find_element_by_css_selector('.field-supporting_bands div.help').text,
             'Supporting Bands.'
         )
 

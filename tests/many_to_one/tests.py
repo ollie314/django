@@ -4,7 +4,7 @@ from copy import deepcopy
 from django.core.exceptions import FieldError, MultipleObjectsReturned
 from django.db import models, transaction
 from django.db.utils import IntegrityError
-from django.test import TestCase
+from django.test import TestCase, ignore_warnings
 from django.utils import six
 from django.utils.deprecation import RemovedInDjango20Warning
 from django.utils.translation import ugettext_lazy
@@ -580,6 +580,7 @@ class ManyToOneTests(TestCase):
         with self.assertNumQueries(1):
             self.assertEqual(th.child_set.count(), 0)
 
+    @ignore_warnings(category=RemovedInDjango20Warning)  # for use_for_related_fields deprecation
     def test_related_object(self):
         public_school = School.objects.create(is_public=True)
         public_student = Student.objects.create(school=public_school)
@@ -600,16 +601,71 @@ class ManyToOneTests(TestCase):
         # If the manager is marked "use_for_related_fields", it'll get used instead
         # of the "bare" queryset. Usually you'd define this as a property on the class,
         # but this approximates that in a way that's easier in tests.
-        School.objects.use_for_related_fields = True
+        School._default_manager.use_for_related_fields = True
         try:
             private_student = Student.objects.get(pk=private_student.pk)
             with self.assertRaises(School.DoesNotExist):
                 private_student.school
         finally:
-            School.objects.use_for_related_fields = False
+            School._default_manager.use_for_related_fields = False
+
+        School._meta.base_manager_name = 'objects'
+        School._meta._expire_cache()
+        try:
+            private_student = Student.objects.get(pk=private_student.pk)
+            with self.assertRaises(School.DoesNotExist):
+                private_student.school
+        finally:
+            School._meta.base_manager_name = None
+            School._meta._expire_cache()
 
     def test_hasattr_related_object(self):
         # The exception raised on attribute access when a related object
         # doesn't exist should be an instance of a subclass of `AttributeError`
         # refs #21563
         self.assertFalse(hasattr(Article(), 'reporter'))
+
+    def test_clear_after_prefetch(self):
+        c = City.objects.create(name='Musical City')
+        District.objects.create(name='Ladida', city=c)
+        city = City.objects.prefetch_related('districts').get(id=c.id)
+        self.assertQuerysetEqual(city.districts.all(), ['<District: Ladida>'])
+        city.districts.clear()
+        self.assertQuerysetEqual(city.districts.all(), [])
+
+    def test_remove_after_prefetch(self):
+        c = City.objects.create(name='Musical City')
+        d = District.objects.create(name='Ladida', city=c)
+        city = City.objects.prefetch_related('districts').get(id=c.id)
+        self.assertQuerysetEqual(city.districts.all(), ['<District: Ladida>'])
+        city.districts.remove(d)
+        self.assertQuerysetEqual(city.districts.all(), [])
+
+    def test_add_after_prefetch(self):
+        c = City.objects.create(name='Musical City')
+        District.objects.create(name='Ladida', city=c)
+        d2 = District.objects.create(name='Ladidu')
+        city = City.objects.prefetch_related('districts').get(id=c.id)
+        self.assertEqual(city.districts.count(), 1)
+        city.districts.add(d2)
+        self.assertEqual(city.districts.count(), 2)
+
+    def test_set_after_prefetch(self):
+        c = City.objects.create(name='Musical City')
+        District.objects.create(name='Ladida', city=c)
+        d2 = District.objects.create(name='Ladidu')
+        city = City.objects.prefetch_related('districts').get(id=c.id)
+        self.assertEqual(city.districts.count(), 1)
+        city.districts.set([d2])
+        self.assertQuerysetEqual(city.districts.all(), ['<District: Ladidu>'])
+
+    def test_add_then_remove_after_prefetch(self):
+        c = City.objects.create(name='Musical City')
+        District.objects.create(name='Ladida', city=c)
+        d2 = District.objects.create(name='Ladidu')
+        city = City.objects.prefetch_related('districts').get(id=c.id)
+        self.assertEqual(city.districts.count(), 1)
+        city.districts.add(d2)
+        self.assertEqual(city.districts.count(), 2)
+        city.districts.remove(d2)
+        self.assertEqual(city.districts.count(), 1)

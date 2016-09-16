@@ -4,6 +4,7 @@ from django.core.checks.urls import (
 )
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
+from django.utils import six
 
 
 class CheckUrlsTest(SimpleTestCase):
@@ -34,7 +35,7 @@ class CheckUrlsTest(SimpleTestCase):
         result = check_url_config(None)
         warning = result[0]
         self.assertEqual(warning.id, 'urls.E004')
-        self.assertRegexpMatches(warning.msg, (
+        six.assertRegex(self, warning.msg, (
             r"^Your URL pattern \('\^tuple/\$', <function <lambda> at 0x(\w+)>\) is "
             r"invalid. Ensure that urlpatterns is a list of url\(\) instances.$"
         ))
@@ -45,7 +46,13 @@ class CheckUrlsTest(SimpleTestCase):
         self.assertEqual(len(result), 1)
         warning = result[0]
         self.assertEqual(warning.id, 'urls.W002')
-        expected_msg = "Your URL pattern '/starting-with-slash/$' has a regex beginning with a '/'"
+        expected_msg = (
+            "Your URL pattern '/starting-with-slash/$' has a regex beginning "
+            "with a '/'. Remove this slash as it is unnecessary. If this "
+            "pattern is targeted in an include(), ensure the include() pattern "
+            "has a trailing '/'."
+        )
+
         self.assertIn(expected_msg, warning.msg)
 
     @override_settings(ROOT_URLCONF='check_framework.urls.name_with_colon')

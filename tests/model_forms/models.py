@@ -122,6 +122,7 @@ class PublicationDefaults(models.Model):
     date_published = models.DateField(default=datetime.date.today)
     mode = models.CharField(max_length=2, choices=MODE_CHOICES, default=default_mode)
     category = models.IntegerField(choices=CATEGORY_CHOICES, default=default_category)
+    active = models.BooleanField(default=True)
 
 
 class Author(models.Model):
@@ -130,7 +131,7 @@ class Author(models.Model):
 
 
 class Author1(models.Model):
-    publication = models.OneToOneField(Publication, models.SET_NULL, null=False)
+    publication = models.OneToOneField(Publication, models.CASCADE, null=False)
     full_name = models.CharField(max_length=255)
 
 
@@ -483,3 +484,7 @@ class StrictAssignmentAll(models.Model):
 class Award(models.Model):
     name = models.CharField(max_length=30)
     character = models.ForeignKey(Character, models.SET_NULL, blank=False, null=True)
+
+
+class NullableUniqueCharFieldModel(models.Model):
+    codename = models.CharField(max_length=50, blank=True, null=True, unique=True)
