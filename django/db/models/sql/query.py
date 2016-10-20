@@ -784,21 +784,15 @@ class Query(object):
         """
         assert set(change_map.keys()).intersection(set(change_map.values())) == set()
 
-        def relabel_column(col):
-            if isinstance(col, (list, tuple)):
-                old_alias = col[0]
-                return (change_map.get(old_alias, old_alias), col[1])
-            else:
-                return col.relabeled_clone(change_map)
         # 1. Update references in "select" (normal columns plus aliases),
         # "group by" and "where".
         self.where.relabel_aliases(change_map)
         if isinstance(self.group_by, list):
-            self.group_by = [relabel_column(col) for col in self.group_by]
+            self.group_by = [col.relabeled_clone(change_map) for col in self.group_by]
         self.select = [col.relabeled_clone(change_map) for col in self.select]
         if self._annotations:
             self._annotations = OrderedDict(
-                (key, relabel_column(col)) for key, col in self._annotations.items())
+                (key, col.relabeled_clone(change_map)) for key, col in self._annotations.items())
 
         # 2. Rename the alias in the internal table/alias datastructures.
         for old_alias, new_alias in six.iteritems(change_map):
@@ -1065,7 +1059,7 @@ class Query(object):
                 if not value.is_compatible_query_object_type(opts, field):
                     raise ValueError(
                         'Cannot use QuerySet for "%s": Use a QuerySet for "%s".' %
-                        (value.model._meta.model_name, opts.object_name)
+                        (value.model._meta.object_name, opts.object_name)
                     )
             elif hasattr(value, '_meta'):
                 self.check_query_object_type(value, opts, field)
@@ -1330,10 +1324,7 @@ class Query(object):
                         "querying. If it is a GenericForeignKey, consider "
                         "adding a GenericRelation." % name
                     )
-                try:
-                    model = field.model._meta.concrete_model
-                except AttributeError:
-                    model = None
+                model = field.model._meta.concrete_model
             else:
                 # We didn't find the current field, so move position back
                 # one step.

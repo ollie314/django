@@ -30,7 +30,7 @@ def lookup_needs_distinct(opts, lookup_path):
     """
     Returns True if 'distinct()' should be used to query the given lookup path.
     """
-    lookup_fields = lookup_path.split('__')
+    lookup_fields = lookup_path.split(LOOKUP_SEP)
     # Remove the last item of the lookup path if it is a query term
     if lookup_fields[-1] in QUERY_TERMS:
         lookup_fields = lookup_fields[:-1]
@@ -499,15 +499,6 @@ def get_fields_from_path(model, path):
         else:
             parent = model
         fields.append(parent._meta.get_field(piece))
-    return fields
-
-
-def remove_trailing_data_field(fields):
-    """ Discard trailing non-relation field if extant. """
-    try:
-        get_model_from_relation(fields[-1])
-    except NotRelationField:
-        fields = fields[:-1]
     return fields
 
 

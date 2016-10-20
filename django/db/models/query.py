@@ -54,8 +54,6 @@ class ModelIterable(BaseIterable):
         results = compiler.execute_sql()
         select, klass_info, annotation_col_map = (compiler.select, compiler.klass_info,
                                                   compiler.annotation_col_map)
-        if klass_info is None:
-            return
         model_cls = klass_info['model']
         select_fields = klass_info['select_fields']
         model_fields_start, model_fields_end = select_fields[0], select_fields[-1] + 1
@@ -440,22 +438,18 @@ class QuerySet(object):
         objs = list(objs)
         self._populate_pk_values(objs)
         with transaction.atomic(using=self.db, savepoint=False):
-            if (connection.features.can_combine_inserts_with_and_without_auto_increment_pk and
-                    self.model._meta.has_auto_field):
-                self._batched_insert(objs, fields, batch_size)
-            else:
-                objs_with_pk, objs_without_pk = partition(lambda o: o.pk is None, objs)
-                if objs_with_pk:
-                    self._batched_insert(objs_with_pk, fields, batch_size)
-                if objs_without_pk:
-                    fields = [f for f in fields if not isinstance(f, AutoField)]
-                    ids = self._batched_insert(objs_without_pk, fields, batch_size)
-                    if connection.features.can_return_ids_from_bulk_insert:
-                        assert len(ids) == len(objs_without_pk)
-                    for obj_without_pk, pk in zip(objs_without_pk, ids):
-                        obj_without_pk.pk = pk
-                        obj_without_pk._state.adding = False
-                        obj_without_pk._state.db = self.db
+            objs_with_pk, objs_without_pk = partition(lambda o: o.pk is None, objs)
+            if objs_with_pk:
+                self._batched_insert(objs_with_pk, fields, batch_size)
+            if objs_without_pk:
+                fields = [f for f in fields if not isinstance(f, AutoField)]
+                ids = self._batched_insert(objs_without_pk, fields, batch_size)
+                if connection.features.can_return_ids_from_bulk_insert:
+                    assert len(ids) == len(objs_without_pk)
+                for obj_without_pk, pk in zip(objs_without_pk, ids):
+                    obj_without_pk.pk = pk
+                    obj_without_pk._state.adding = False
+                    obj_without_pk._state.db = self.db
 
         return objs
 
@@ -1150,10 +1144,6 @@ class QuerySet(object):
         if clone._db is None or connection == connections[clone._db]:
             return clone.query.get_compiler(connection=connection).as_nested_sql()
         raise ValueError("Can't do subqueries with queries on different DBs.")
-
-    # When used as part of a nested query, a queryset will never be an "always
-    # empty" result.
-    value_annotation = True
 
     def _add_hints(self, **hints):
         """

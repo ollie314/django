@@ -2946,7 +2946,7 @@ class WhereNodeTest(TestCase):
             w.as_sql(compiler, connection)
 
 
-class IteratorExceptionsTest(TestCase):
+class QuerySetExceptionTests(TestCase):
     def test_iter_exceptions(self):
         qs = ExtraInfo.objects.only('author')
         with self.assertRaises(AttributeError):
@@ -2956,10 +2956,23 @@ class IteratorExceptionsTest(TestCase):
         # Test for #19895 - second iteration over invalid queryset
         # raises errors.
         qs = Article.objects.order_by('invalid_column')
-        with self.assertRaises(FieldError):
+        msg = "Cannot resolve keyword 'invalid_column' into field."
+        with self.assertRaisesMessage(FieldError, msg):
             list(qs)
-        with self.assertRaises(FieldError):
+        with self.assertRaisesMessage(FieldError, msg):
             list(qs)
+
+    def test_invalid_order_by(self):
+        msg = "Invalid order_by arguments: ['*']"
+        if six.PY2:
+            msg = msg.replace("[", "[u")
+        with self.assertRaisesMessage(FieldError, msg):
+            list(Article.objects.order_by('*'))
+
+    def test_invalid_queryset_model(self):
+        msg = 'Cannot use QuerySet for "Article": Use a QuerySet for "ExtraInfo".'
+        with self.assertRaisesMessage(ValueError, msg):
+            list(Author.objects.filter(extra=Article.objects.all()))
 
 
 class NullJoinPromotionOrTest(TestCase):

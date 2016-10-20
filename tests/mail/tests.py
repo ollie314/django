@@ -554,7 +554,7 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
             'Subject', 'UTF-8 encoded body', 'bounce@example.com', ['to@example.com'],
             headers={'From': 'from@example.com'},
         )
-        self.assertNotIn(b'Content-Transfer-Encoding: base64', msg.message().as_bytes())
+        self.assertIn(b'Content-Transfer-Encoding: 7bit', msg.message().as_bytes())
 
         # Ticket #11212
         # Shouldn't use quoted printable, should detect it can represent content with 7 bit data
@@ -563,7 +563,6 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
             headers={'From': 'from@example.com'},
         )
         s = msg.message().as_bytes()
-        self.assertNotIn(b'Content-Transfer-Encoding: quoted-printable', s)
         self.assertIn(b'Content-Transfer-Encoding: 7bit', s)
 
         # Shouldn't use quoted printable, should detect it can represent content with 8 bit data
@@ -572,16 +571,18 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
             headers={'From': 'from@example.com'},
         )
         s = msg.message().as_bytes()
-        self.assertNotIn(b'Content-Transfer-Encoding: quoted-printable', s)
         self.assertIn(b'Content-Transfer-Encoding: 8bit', s)
+        s = msg.message().as_string()
+        self.assertIn(str('Content-Transfer-Encoding: 8bit'), s)
 
         msg = EmailMessage(
             'Subject', 'Body with non latin characters: А Б В Г Д Е Ж Ѕ З И І К Л М Н О П.', 'bounce@example.com',
             ['to@example.com'], headers={'From': 'from@example.com'},
         )
         s = msg.message().as_bytes()
-        self.assertNotIn(b'Content-Transfer-Encoding: quoted-printable', s)
         self.assertIn(b'Content-Transfer-Encoding: 8bit', s)
+        s = msg.message().as_string()
+        self.assertIn(str('Content-Transfer-Encoding: 8bit'), s)
 
     def test_dont_base64_encode_message_rfc822(self):
         # Ticket #18967
